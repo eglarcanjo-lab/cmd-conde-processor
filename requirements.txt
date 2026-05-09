@@ -1,0 +1,9 @@
+flask==3.0.0
+flask-cors==4.0.0
+pandas==2.1.4
+gspread==6.0.2
+google-auth==2.25.2
+python-dotenv==1.0.0
+gunicorn==21.2.0
+openpyxl==3.1.2
+chardet==5.2.0

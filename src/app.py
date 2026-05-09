@@ -1,0 +1,137 @@
+import os
+import traceback
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from dotenv import load_dotenv
+from processor import processar_clientes, processar_pedidos
+from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
+import pandas as pd
+
+load_dotenv()
+
+app = Flask(__name__)
+CORS(app, origins=[
+    os.environ.get("FRONTEND_URL", "http://localhost:5173"),
+    "https://*.vercel.app",
+])
+
+PROCESSOR_TOKEN = os.environ.get("PROCESSOR_TOKEN", "cmd_processor_secret")
+
+
+def verificar_token(req):
+    token = req.headers.get("X-Processor-Token") or req.args.get("token")
+    return token == PROCESSOR_TOKEN
+
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "service": "cmd-conde-processor"})
+
+
+@app.route("/api/processar/clientes", methods=["POST"])
+def upload_clientes():
+    """Recebe o arquivo 0105070402 e processa."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+
+    arquivo = request.files["arquivo"]
+    conteudo = arquivo.read()
+
+    try:
+        df_clientes = processar_clientes(conteudo)
+        return jsonify({
+            "success": True,
+            "message": f"Clientes processados: {len(df_clientes)} PDVs.",
+        })
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("0105070402 (Clientes)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/pedidos", methods=["POST"])
+def upload_pedidos():
+    """Recebe o arquivo 03014701 e processa."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+
+    arquivo = request.files["arquivo"]
+    conteudo = arquivo.read()
+
+    try:
+        # Tenta carregar base de clientes já processada
+        df_clientes = ler_aba("pdv_base")
+        processar_pedidos(conteudo, df_clientes if not df_clientes.empty else None)
+        return jsonify({
+            "success": True,
+            "message": "Pedidos processados com sucesso.",
+        })
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("03014701 (Pedidos)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/ambos", methods=["POST"])
+def upload_ambos():
+    """Recebe clientes + pedidos e processa tudo de uma vez."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+
+    arquivos = request.files
+    resultados = {}
+
+    # Clientes primeiro (pedidos dependem da base de PDVs)
+    if "clientes" in arquivos:
+        try:
+            df_clientes = processar_clientes(arquivos["clientes"].read())
+            resultados["clientes"] = f"✅ {len(df_clientes)} PDVs processados"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["clientes"] = f"❌ Erro: {str(e)[:100]}"
+            df_clientes = None
+    else:
+        df_clientes = ler_aba("pdv_base")
+        resultados["clientes"] = "⚠️ Arquivo não enviado, usando base existente"
+
+    if "pedidos" in arquivos:
+        try:
+            processar_pedidos(
+                arquivos["pedidos"].read(),
+                df_clientes if df_clientes is not None and not df_clientes.empty else None
+            )
+            resultados["pedidos"] = "✅ Processados com sucesso"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["pedidos"] = f"❌ Erro: {str(e)[:100]}"
+
+    return jsonify({"success": True, "resultados": resultados})
+
+
+@app.route("/api/status-arquivos")
+def status_arquivos():
+    """Retorna o status de atualização de cada arquivo."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    df = ler_aba("status_arquivos")
+    return jsonify(df.to_dict(orient="records") if not df.empty else [])
+
+
+@app.route("/api/produtos-sem-categoria")
+def produtos_sem_categoria():
+    """Lista produtos sem categoria cadastrada."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    df = ler_aba("produtos_sem_categoria")
+    return jsonify(df.to_dict(orient="records") if not df.empty else [])
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
