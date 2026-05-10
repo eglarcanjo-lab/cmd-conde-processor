@@ -350,3 +350,54 @@ def _registrar_sem_categoria(df, mapa_produtos):
     sem_cat["alerta"] = "⚠️ Sem categoria"
     sobrescrever_aba("produtos_sem_categoria", sem_cat)
     print(f"  ⚠️ {len(sem_cat)} produtos sem categoria registrados")
+
+
+def processar_inadimplencia(conteudo_bytes):
+    """
+    Processa o arquivo 121601 (inadimplência).
+    Gera a aba inadimplencia_real com títulos vencidos por PDV.
+    """
+    print("📂 Processando inadimplência...")
+    df = ler_csv_inf(conteudo_bytes)
+    df.columns = [c.strip() for c in df.columns]
+
+    # Normaliza setor pelo campo Vendedor
+    df["_setor"] = df["Vendedor"].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+
+    # Normaliza cod PDV
+    df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0")
+    df["_nome"] = df["Nome"].str.strip()
+
+    # Dias: valores negativos = vencido, positivos = a vencer
+    df["_dias"] = pd.to_numeric(df["Dias"].str.strip(), errors="coerce").fillna(0)
+
+    # Valor pendente: remove + e vírgula brasileira
+    df["_valor"] = df["ValorPendente"].str.replace("+", "", regex=False).str.replace(",", ".").str.strip()
+    df["_valor"] = pd.to_numeric(df["_valor"], errors="coerce").fillna(0)
+
+    # Agrupa por PDV
+    resumo = (
+        df.groupby(["_setor", "_cod_pdv", "_nome"])
+        .agg(
+            qtd_titulos=("_valor", "count"),
+            valor_total=("_valor", "sum"),
+            maior_atraso=("_dias", "min"),  # mais negativo = mais atrasado
+            aging=("AGING", lambda x: x.mode()[0] if len(x) > 0 else ""),
+        )
+        .reset_index()
+        .rename(columns={
+            "_setor": "setor",
+            "_cod_pdv": "cod_pdv",
+            "_nome": "nome_fantasia",
+        })
+    )
+
+    resumo["maior_atraso"] = resumo["maior_atraso"].abs().astype(int)
+    resumo["valor_total"] = resumo["valor_total"].round(2)
+    resumo = resumo.sort_values("maior_atraso", ascending=False)
+
+    sobrescrever_aba("inadimplencia_real", resumo)
+    atualizar_status_arquivo("121601 (Inadimplência)", "✅ OK", f"{len(resumo)} PDVs inadimplentes")
+    print(f"  ✅ Inadimplência processada: {len(resumo)} PDVs")
+    return resumo

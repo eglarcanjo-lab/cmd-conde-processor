@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -100,6 +100,14 @@ def upload_ambos():
         df_clientes = ler_aba("pdv_base")
         resultados["clientes"] = "⚠️ Arquivo não enviado, usando base existente"
 
+    if "inadimplencia" in arquivos:
+        try:
+            processar_inadimplencia(arquivos["inadimplencia"].read())
+            resultados["inadimplencia"] = "✅ Processada com sucesso"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["inadimplencia"] = f"❌ Erro: {str(e)[:100]}"
+
     if "pedidos" in arquivos:
         try:
             processar_pedidos(
@@ -130,6 +138,23 @@ def produtos_sem_categoria():
         return jsonify({"error": "Token inválido."}), 401
     df = ler_aba("produtos_sem_categoria")
     return jsonify(df.to_dict(orient="records") if not df.empty else [])
+
+
+
+@app.route("/api/processar/inadimplencia", methods=["POST"])
+def upload_inadimplencia():
+    """Recebe o arquivo 121601 e processa."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+    try:
+        df = processar_inadimplencia(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Inadimplência processada: {len(df)} PDVs."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("121601 (Inadimplência)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
