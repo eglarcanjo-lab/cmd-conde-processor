@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -100,6 +100,14 @@ def upload_ambos():
         df_clientes = ler_aba("pdv_base")
         resultados["clientes"] = "⚠️ Arquivo não enviado, usando base existente"
 
+    if "tasks" in arquivos:
+        try:
+            processar_tasks(arquivos["tasks"].read())
+            resultados["tasks"] = "✅ Processadas com sucesso"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["tasks"] = f"❌ Erro: {str(e)[:100]}"
+
     if "inadimplencia" in arquivos:
         try:
             processar_inadimplencia(arquivos["inadimplencia"].read())
@@ -154,6 +162,22 @@ def upload_inadimplencia():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("121601 (Inadimplência)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/tasks", methods=["POST"])
+def upload_tasks():
+    """Recebe o arquivo de tasks (xlsx) e processa."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+    try:
+        df = processar_tasks(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Tasks processadas: {len(df)}."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("Tasks (BI)", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 

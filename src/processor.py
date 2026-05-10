@@ -401,3 +401,65 @@ def processar_inadimplencia(conteudo_bytes):
     atualizar_status_arquivo("121601 (Inadimplência)", "✅ OK", f"{len(resumo)} PDVs inadimplentes")
     print(f"  ✅ Inadimplência processada: {len(resumo)} PDVs")
     return resumo
+
+
+def processar_tasks(conteudo_bytes):
+    """
+    Processa o arquivo de tasks do BI (xlsx).
+    Gera a aba tasks com status VALID/INVALID/OPEN por PDV.
+    """
+    import io
+    print("📂 Processando tasks...")
+    
+    try:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str)
+    except Exception:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+    
+    df.columns = [c.strip() for c in df.columns]
+    
+    # Normaliza setor
+    df["_setor"] = df["Setor"].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+    
+    # Normaliza cod PDV
+    df["_cod_pdv"] = df["Pdv"].str.strip().str.lstrip("0")
+    
+    # Converte data de visita (serial Excel → data)
+    def serial_to_date(val):
+        try:
+            n = int(float(str(val).strip()))
+            from datetime import date
+            return (date(1899, 12, 30) + pd.Timedelta(days=n)).strftime("%d/%m/%Y")
+        except:
+            return str(val).strip()
+    
+    df["_data_visita"] = df["Data Visita"].apply(serial_to_date)
+    df["_data_criacao"] = df["Data Criação Tarefa"].apply(serial_to_date)
+    df["_data_conclusao"] = df["Data Conclusão Tarefa"].apply(serial_to_date)
+    
+    # Status normalizado
+    df["_status"] = df["Effectiveness Result"].str.strip().str.upper()
+    
+    resultado = []
+    for _, row in df.iterrows():
+        resultado.append({
+            "setor": row["_setor"],
+            "cod_pdv": row["_cod_pdv"],
+            "data_visita": row["_data_visita"],
+            "data_criacao": row["_data_criacao"],
+            "data_conclusao": row["_data_conclusao"],
+            "status": row["_status"],
+            "tipo": str(row.get("Cluster Secundário", "")).strip(),
+            "categoria": str(row.get("Categoria", "")).strip(),
+            "descricao": str(row.get("Texto da Tarefa", "")).strip(),
+            "pontuacao": str(row.get("Pontuação", "")).strip(),
+            "id_task": str(row.get("Id task pool", "")).strip(),
+            "mes_ano": str(row.get("Mês/ Ano", "")).strip(),
+        })
+    
+    df_tasks = pd.DataFrame(resultado)
+    sobrescrever_aba("tasks", df_tasks)
+    atualizar_status_arquivo("Tasks (BI)", "✅ OK", f"{len(df_tasks)} tasks processadas")
+    print(f"  ✅ Tasks processadas: {len(df_tasks)}")
+    return df_tasks
