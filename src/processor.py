@@ -411,18 +411,11 @@ def processar_tasks(conteudo_bytes):
     import io
     print("📂 Processando tasks...")
     
-    # Tenta ler com skiprows=1 (primeira linha são os filtros aplicados, não o cabeçalho)
+    # Linha 0: filtros, Linha 1: vazia, Linha 2: cabeçalho real
     try:
-        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str, skiprows=1)
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str, skiprows=2)
     except Exception:
-        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str, skiprows=1)
-    
-    # Se o cabeçalho esperado não estiver presente, tenta sem skiprows
-    if "Pdv" not in df.columns and "Setor" not in df.columns:
-        try:
-            df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str)
-        except Exception:
-            df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str, skiprows=2)
     
     df.columns = [c.strip() for c in df.columns]
     
