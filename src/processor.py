@@ -177,19 +177,23 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     mapa_produtos = carregar_base_produtos(df_prods_base) if not df_prods_base.empty else {}
 
     # Resolver categoria de cada linha
-    def get_cat(row):
+    def get_cats(row):
+        """Retorna lista de categorias para o produto."""
         cod = str(row.get("Cod. Prod.", "")).strip()
-        cat_sheet = mapa_produtos.get(cod)
-        if cat_sheet:
-            return cat_sheet
-        return resolver_categoria(
+        cats_sheet = mapa_produtos.get(cod)
+        if cats_sheet:
+            return cats_sheet  # lista de categorias
+        cat_unica = resolver_categoria(
             cod,
             row.get("Cat_Funda", ""),
             row.get("Nome Prod.", ""),
             row.get("Código Marca", ""),
         )
+        return [cat_unica] if cat_unica else []
 
-    df["_categoria"] = df.apply(get_cat, axis=1)
+    df["_categorias"] = df.apply(get_cats, axis=1)
+    # Para compatibilidade: _categoria = primeira categoria da lista
+    df["_categoria"] = df["_categorias"].apply(lambda x: x[0] if x else None)
 
     # Normalizar volume
     df["_volume"] = df["Volume Entrega"].str.replace(",", ".").apply(
@@ -234,17 +238,17 @@ def _processar_cobertura(df_atual, df_ant, df_clientes):
     """Gera cobertura OK/Pendente/NOK por PDV x Categoria."""
     cats = [c for c in CATEGORIAS_VALIDAS if c not in ("TRIMARCA RGB HE (Original)", "TRIMARCA RGB HE (Stella)", "TRIMARCA RGB HE (Spaten)")]
 
-    # PDVs que compraram no mês atual (por categoria)
-    ok_set = set(
-        df_atual[df_atual["_categoria"].notna() & (df_atual["_volume"] > 0)]
-        .apply(lambda r: (r["_cod_pdv"], r["_categoria"]), axis=1)
-    )
+    # PDVs que compraram no mês atual (por categoria) — expande múltiplas categorias
+    ok_set = set()
+    for _, row in df_atual[df_atual["_volume"] > 0].iterrows():
+        for cat in (row.get("_categorias") or []):
+            ok_set.add((row["_cod_pdv"], cat))
 
     # PDVs que compraram no mês anterior (por categoria)
-    pend_set = set(
-        df_ant[df_ant["_categoria"].notna() & (df_ant["_volume"] > 0)]
-        .apply(lambda r: (r["_cod_pdv"], r["_categoria"]), axis=1)
-    )
+    pend_set = set()
+    for _, row in df_ant[df_ant["_volume"] > 0].iterrows():
+        for cat in (row.get("_categorias") or []):
+            pend_set.add((row["_cod_pdv"], cat))
 
     # Base de PDVs
     if df_clientes is not None and not df_clientes.empty:
