@@ -343,6 +343,15 @@ def _processar_devolucoes(df):
 def _registrar_sem_categoria(df, mapa_produtos):
     """Registra produtos que apareceram nos pedidos mas não têm categoria."""
     df["_cod_str"] = df["Cod. Prod."].str.strip()
+
+    # Atualiza produtos_base com todos os produtos que aparecem nos pedidos
+    todos_prods = df[["_cod_str", "Nome Prod."]].drop_duplicates()
+    todos_prods = todos_prods.rename(columns={"_cod_str": "cod", "Nome Prod.": "nome"})
+    todos_prods["categoria"] = todos_prods["cod"].map(mapa_produtos).fillna("")
+    todos_prods["atualizado_em"] = date.today().strftime("%d/%m/%Y")
+    sobrescrever_aba("produtos_base", todos_prods)
+
+    # Registra os sem categoria
     sem_cat = df[df["_categoria"].isna()][["_cod_str", "Nome Prod."]].drop_duplicates()
     sem_cat = sem_cat[~sem_cat["_cod_str"].isin(mapa_produtos.keys())]
     sem_cat = sem_cat.rename(columns={"_cod_str": "cod_prod", "Nome Prod.": "nome_prod"})
@@ -350,6 +359,7 @@ def _registrar_sem_categoria(df, mapa_produtos):
     sem_cat["alerta"] = "⚠️ Sem categoria"
     sobrescrever_aba("produtos_sem_categoria", sem_cat)
     print(f"  ⚠️ {len(sem_cat)} produtos sem categoria registrados")
+    print(f"  📦 {len(todos_prods)} produtos na base")
 
 
 def processar_inadimplencia(conteudo_bytes):
@@ -398,7 +408,7 @@ def processar_inadimplencia(conteudo_bytes):
     resumo = resumo.sort_values("maior_atraso", ascending=False)
 
     sobrescrever_aba("inadimplencia_real", resumo)
-    atualizar_status_arquivo("121601 (Inadimplência)", "✅ OK", f"{len(resumo)} PDVs inadimplentes")
+    atualizar_status_arquivo("120601 (Inadimplência)", "✅ OK", f"{len(resumo)} PDVs inadimplentes")
     print(f"  ✅ Inadimplência processada: {len(resumo)} PDVs")
     return resumo
 
