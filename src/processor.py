@@ -50,7 +50,12 @@ def normalizar_dia_visita(dia_raw):
 
 
 def dia_semana_hoje():
-    return date.today().weekday()  # 0=SEG, 6=DOM
+    """Retorna o dia da semana atual no horário de Brasília (0=SEG, 6=DOM)."""
+    from datetime import datetime
+    import pytz
+    brasilia = pytz.timezone("America/Sao_Paulo")
+    agora = datetime.now(brasilia)
+    return agora.weekday()
 
 
 def processar_clientes(conteudo_bytes):
