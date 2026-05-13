@@ -373,10 +373,25 @@ def _registrar_sem_categoria(df, mapa_produtos):
     todos_prods = todos_prods[["cod", "nome", "categorias", "atualizado_em"]]
     sobrescrever_aba("produtos_base", todos_prods)
 
-    # Registra os sem categoria
+    # Registra os sem categoria — usa nome completo da base 0111
+    try:
+        df_base_nomes = ler_aba("produtos_base")
+        mapa_nomes_completos = {}
+        if not df_base_nomes.empty and "cod" in df_base_nomes.columns:
+            for _, row in df_base_nomes.iterrows():
+                cod = str(row.get("cod","")).strip()
+                nome = str(row.get("nome","")).strip()
+                if cod and nome:
+                    mapa_nomes_completos[cod] = nome
+    except Exception:
+        mapa_nomes_completos = {}
+
     sem_cat = df[df["_categoria"].isna()][["_cod_str", "Nome Prod."]].drop_duplicates()
     sem_cat = sem_cat[~sem_cat["_cod_str"].isin(mapa_produtos.keys())]
-    sem_cat = sem_cat.rename(columns={"_cod_str": "cod_prod", "Nome Prod.": "nome_prod"})
+    sem_cat = sem_cat.rename(columns={"_cod_str": "cod_prod", "Nome Prod.": "nome_pedido"})
+    # Usa nome completo da base 0111, fallback para nome do pedido
+    sem_cat["nome_prod"] = sem_cat["cod_prod"].map(mapa_nomes_completos).fillna(sem_cat["nome_pedido"])
+    sem_cat = sem_cat[["cod_prod", "nome_prod"]].drop_duplicates(subset=["cod_prod"])
     sem_cat["categoria"] = ""
     sem_cat["alerta"] = "⚠️ Sem categoria"
     sobrescrever_aba("produtos_sem_categoria", sem_cat)
@@ -500,44 +515,61 @@ def processar_tasks(conteudo_bytes):
 def processar_produtos_base(conteudo_bytes):
     """
     Processa o arquivo 0111 (base de produtos do sistema).
-    Mantém todas as colunas originais + coluna categorias (editável pelo app).
+    Atualiza APENAS os nomes dos produtos que já estão na base de vendas.
+    Não importa produtos sem vendas — mantém a base leve.
     Importação semanal.
     """
     print("📂 Processando base de produtos (0111)...")
     df = ler_csv_inf(conteudo_bytes)
     df.columns = [c.strip() for c in df.columns]
 
-    # Normaliza código (remove zeros à esquerda)
-    df["cod"] = df["Código"].str.strip().str.lstrip("0")
-    df["nome"] = df["Descrição"].str.strip()
+    # Monta dicionário cod → dados completos do 0111
+    df["_cod"] = df["Código"].str.strip().str.lstrip("0")
+    df["_nome"] = df["Descrição"].str.strip()
+    mapa_0111 = {}
+    for _, row in df.iterrows():
+        cod = row["_cod"]
+        if cod:
+            mapa_0111[cod] = {
+                "nome": row["_nome"],
+                "tipo_marca": str(row.get("Tipo Marca", "")).strip(),
+                "linha_marca": str(row.get("Linha Marca", "")).strip(),
+                "embalagem": str(row.get("Embalagem", "")).strip(),
+                "marca": str(row.get("Marca", "")).strip(),
+                "pgv": str(row.get("PGV", "")).strip(),
+            }
 
-    # Mantém todas as colunas originais + cod normalizado
-    df_out = df.copy()
-    df_out["cod"] = df["cod"]
-    df_out["nome"] = df["nome"]
-
-    # Tenta preservar categorias já cadastradas no app
+    # Carrega base existente (apenas produtos com vendas)
     try:
-        df_existente = ler_aba("produtos_base")
-        if not df_existente.empty and "cod" in df_existente.columns:
-            mapa_cats = {}
-            for _, row in df_existente.iterrows():
-                cod = str(row.get("cod", "")).strip()
-                cats = str(row.get("categorias", "")).strip()
-                if cod and cats:
-                    mapa_cats[cod] = cats
-            df_out["categorias"] = df_out["cod"].map(mapa_cats).fillna("")
-        else:
-            df_out["categorias"] = ""
+        df_base = ler_aba("produtos_base")
     except Exception:
-        df_out["categorias"] = ""
+        df_base = pd.DataFrame()
 
-    # Reordena: cod e nome na frente, categorias por último
-    cols_originais = [c for c in df.columns if c not in ("cod", "nome")]
-    df_final = df_out[["cod", "nome"] + cols_originais + ["categorias"]]
+    if df_base.empty or "cod" not in df_base.columns:
+        atualizar_status_arquivo("0111 (Produtos)", "⚠️ Aguardando", "Importe os pedidos primeiro para popular a base")
+        print("  ⚠️ Base de vendas vazia — importe os pedidos primeiro")
+        return pd.DataFrame()
 
+    # Atualiza nomes e dados do 0111 apenas para produtos que já estão na base
+    atualizados = 0
+    rows = []
+    for _, row in df_base.iterrows():
+        cod = str(row.get("cod", "")).strip()
+        dados_0111 = mapa_0111.get(cod, {})
+        nova_row = dict(row)
+        if dados_0111:
+            nova_row["nome"] = dados_0111["nome"]
+            nova_row["tipo_marca"] = dados_0111["tipo_marca"]
+            nova_row["linha_marca"] = dados_0111["linha_marca"]
+            nova_row["embalagem"] = dados_0111["embalagem"]
+            nova_row["marca"] = dados_0111["marca"]
+            nova_row["pgv"] = dados_0111["pgv"]
+            atualizados += 1
+        rows.append(nova_row)
+
+    df_final = pd.DataFrame(rows)
     sobrescrever_aba("produtos_base", df_final)
-    atualizar_status_arquivo("0111 (Produtos)", "✅ OK", f"{len(df_final)} produtos importados")
-    print(f"  ✅ Base de produtos: {len(df_final)} produtos")
+    atualizar_status_arquivo("0111 (Produtos)", "✅ OK", f"{atualizados} produtos com nome atualizado de {len(df_final)} na base")
+    print(f"  ✅ 0111 processado: {atualizados}/{len(df_final)} produtos atualizados")
     return df_final
 
