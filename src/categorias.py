@@ -17,6 +17,7 @@ CATEGORIAS_VALIDAS = [
     "MATCH",
     "LITRINHO",
     "MKTP",
+    "BALANCED CHOICE",
 ]
 
 # Mapeamento direto de categorias brutas (base_temporaria) → categorias do app
@@ -30,6 +31,8 @@ MAPA_CATEGORIA_BRUTA = {
     "CERVEJA ZERO BC":    "CERVEJA ZERO",
     "CERVEJA MULTIPACK":  "CERVEJA MULTIPACK",
     "MKTPLACE":           "MKTP",
+    "BALANCED CHOICE":    "BALANCED CHOICE",
+    "BC":                 "BALANCED CHOICE",
     "MATCH":              "MATCH",
     "LITRINHO":           "LITRINHO",
     "0":                  None,
