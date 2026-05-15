@@ -353,30 +353,56 @@ def _registrar_sem_categoria(df, mapa_produtos):
     """Registra produtos que apareceram nos pedidos mas não têm categoria."""
     df["_cod_str"] = df["Cod. Prod."].str.strip()
 
-    # Atualiza produtos_base com produtos dos pedidos
-    # Usa nome da base 0111 se disponível, senão usa nome do pedido
+    # PRESERVA categorias da produtos_base — apenas adiciona produtos novos
     try:
         df_base_atual = ler_aba("produtos_base")
-        mapa_nomes = {}
+        mapa_base = {}  # {cod: {nome, categorias}}
         if not df_base_atual.empty and "cod" in df_base_atual.columns:
             for _, row in df_base_atual.iterrows():
                 cod = str(row.get("cod","")).strip()
-                nome = str(row.get("nome","")).strip()
-                if cod and nome:
-                    mapa_nomes[cod] = nome
+                if cod:
+                    mapa_base[cod] = {
+                        "nome": str(row.get("nome","")).strip(),
+                        "categorias": str(row.get("categorias","")).strip(),
+                    }
     except Exception:
-        mapa_nomes = {}
+        mapa_base = {}
 
+    # Produtos que aparecem nos pedidos
     todos_prods = df[["_cod_str", "Nome Prod."]].drop_duplicates()
     todos_prods = todos_prods.rename(columns={"_cod_str": "cod", "Nome Prod.": "nome_pedido"})
-    # Usa nome completo da base 0111 se disponível
-    todos_prods["nome"] = todos_prods["cod"].map(mapa_nomes).fillna(todos_prods["nome_pedido"])
-    todos_prods["categorias"] = todos_prods["cod"].map(
-        lambda c: "|".join(mapa_produtos.get(c, [])) if isinstance(mapa_produtos.get(c), list) else (mapa_produtos.get(c) or "")
-    )
-    todos_prods["atualizado_em"] = date.today().strftime("%d/%m/%Y")
-    todos_prods = todos_prods[["cod", "nome", "categorias", "atualizado_em"]]
-    sobrescrever_aba("produtos_base", todos_prods)
+
+    linhas_base = []
+    for _, row in todos_prods.iterrows():
+        cod = str(row["cod"]).strip()
+        nome_pedido = str(row["nome_pedido"]).strip()
+        existente = mapa_base.get(cod, {})
+
+        # Preserva nome da base 0111 se já existe, senão usa nome do pedido
+        nome = existente.get("nome") or nome_pedido
+
+        # PRESERVA categorias já cadastradas — não sobrescreve
+        cats_existentes = existente.get("categorias", "")
+        if cats_existentes:
+            categorias = cats_existentes
+        else:
+            # Só resolve categoria se ainda não tem nenhuma cadastrada
+            cats_list = mapa_produtos.get(cod, [])
+            if isinstance(cats_list, list):
+                categorias = "|".join(cats_list)
+            else:
+                categorias = cats_list or ""
+
+        linhas_base.append({
+            "cod": cod,
+            "nome": nome,
+            "categorias": categorias,
+            "atualizado_em": date.today().strftime("%d/%m/%Y"),
+        })
+
+    df_base_nova = pd.DataFrame(linhas_base)
+    sobrescrever_aba("produtos_base", df_base_nova)
+    print(f"  📦 produtos_base atualizada: {len(df_base_nova)} produtos (categorias preservadas)")
 
     # Registra os sem categoria — usa nome completo da base 0111
     try:
