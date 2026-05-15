@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -99,6 +99,22 @@ def upload_ambos():
     else:
         df_clientes = ler_aba("pdv_base")
         resultados["clientes"] = "⚠️ Arquivo não enviado, usando base existente"
+
+    if "faturamento_mktp" in arquivos:
+        try:
+            processar_faturamento_mktp(arquivos["faturamento_mktp"].read())
+            resultados["faturamento_mktp"] = "✅ Processado com sucesso"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["faturamento_mktp"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "pontos_bees" in arquivos:
+        try:
+            processar_pontos_bees(arquivos["pontos_bees"].read())
+            resultados["pontos_bees"] = "✅ Processados com sucesso"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["pontos_bees"] = f"❌ Erro: {str(e)[:100]}"
 
     if "produtos_base" in arquivos:
         try:
@@ -202,6 +218,43 @@ def upload_produtos_base():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("0111 (Produtos)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/faturamento-mktp", methods=["POST"])
+def upload_faturamento_mktp():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
+    try:
+        df = processar_faturamento_mktp(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Faturamento Mktp: {len(df)} setores."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("030509 (Faturamento Mktp)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/pontos-bees", methods=["POST"])
+def upload_pontos_bees():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
+    try:
+        df = processar_pontos_bees(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Pontos Bees: {len(df)} setores."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("Pontos Bees (BI)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/rv/calcular", methods=["POST"])
+def calcular_rv():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    try:
+        df = calcular_rv_completa()
+        return jsonify({"success": True, "message": f"RV calculada: {len(df)} setores."})
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 

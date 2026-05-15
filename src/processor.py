@@ -588,3 +588,503 @@ def processar_produtos_base(conteudo_bytes):
     print(f"  ✅ 0111 processado: {atualizados}/{len(df_final)} produtos atualizados")
     return df_final
 
+
+
+def processar_faturamento_mktp(conteudo_bytes):
+    """
+    Processa o arquivo 030509 (faturamento consolidado por cliente/produto).
+    Filtra apenas produtos da categoria MKTP e agrega por setor.
+    """
+    print("📂 Processando faturamento Mktp (030509)...")
+    df = ler_csv_inf(conteudo_bytes)
+    df.columns = [c.strip() for c in df.columns]
+
+    # Colunas usadas: Cliente, Cod.Produto, Total Venda, Vendedor
+    df["_setor"] = df["Vendedor"].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+
+    df["_cod_prod"] = df["Cod.Produto"].str.strip()
+    df["_total_venda"] = df["Total Venda"].str.replace(",", ".").str.replace("+", "", regex=False).str.strip()
+    df["_total_venda"] = pd.to_numeric(df["_total_venda"], errors="coerce").fillna(0)
+
+    # Filtra apenas produtos MKTP usando mapa de produtos
+    df_prods = ler_aba("produtos_base")
+    mapa_cats = carregar_base_produtos(df_prods) if not df_prods.empty else {}
+
+    def is_mktp(cod):
+        cats = mapa_cats.get(str(cod).strip(), [])
+        if isinstance(cats, list):
+            return "MKTP" in cats
+        return cats == "MKTP"
+
+    df["_is_mktp"] = df["_cod_prod"].apply(is_mktp)
+    df_mktp = df[df["_is_mktp"]].copy()
+
+    # Agrega por setor
+    hoje = date.today()
+    mes_ref = hoje.strftime("%Y-%m")
+
+    resultado = (
+        df_mktp.groupby("_setor")["_total_venda"]
+        .sum()
+        .reset_index()
+        .rename(columns={"_setor": "setor", "_total_venda": "faturamento"})
+    )
+    resultado["mes_ref"] = mes_ref
+    resultado["faturamento"] = resultado["faturamento"].round(2)
+
+    sobrescrever_aba("rv_mktp", resultado[["setor", "mes_ref", "faturamento"]])
+    atualizar_status_arquivo("030509 (Faturamento Mktp)", "✅ OK", f"{len(resultado)} setores processados")
+    print(f"  ✅ Faturamento Mktp: {len(resultado)} setores")
+    return resultado
+
+
+def processar_pontos_bees(conteudo_bytes):
+    """
+    Processa o arquivo de pontos Bees do BI.
+    Formato: Código Setor | Segmento RN | Coins Total
+    """
+    import io as _io
+    print("📂 Processando pontos Bees...")
+    
+    try:
+        df = pd.read_excel(_io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str)
+    except Exception:
+        df = ler_csv_inf(conteudo_bytes)
+
+    df.columns = [c.strip() for c in df.columns]
+
+    hoje = date.today()
+    mes_ref = hoje.strftime("%Y-%m")
+
+    # Normaliza colunas
+    cod_col = next((c for c in df.columns if "código" in c.lower() or "setor" in c.lower() or "cod" in c.lower()), df.columns[0])
+    coins_col = next((c for c in df.columns if "coins" in c.lower() or "pontos" in c.lower() or "total" in c.lower()), df.columns[-1])
+
+    df["_setor"] = df[cod_col].apply(normalizar_setor)
+    df["_pontos"] = pd.to_numeric(df[coins_col].str.replace(",", "."), errors="coerce").fillna(0)
+
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+
+    resultado = df[["_setor", "_pontos"]].rename(columns={"_setor": "setor", "_pontos": "pontos_real"})
+    resultado["mes_ref"] = mes_ref
+
+    sobrescrever_aba("rv_pontos", resultado[["setor", "mes_ref", "pontos_real"]])
+    atualizar_status_arquivo("Pontos Bees (BI)", "✅ OK", f"{len(resultado)} setores processados")
+    print(f"  ✅ Pontos Bees: {len(resultado)} setores")
+    return resultado
+
+
+def processar_volume_rv(df_pedidos, mes_ref):
+    """
+    Extrai volume por setor e categoria para cálculo de RV.
+    Gera aba rv_volume com: setor | categoria | volume | mes_ref
+    """
+    print("📊 Gerando volume RV...")
+    
+    cats_rv = ["CERVEJA", "NAB", "MATCH", "GIRO RGB", "HE"]
+    
+    linhas = []
+    for _, row in df_pedidos[df_pedidos["_volume"] > 0].iterrows():
+        cats = row.get("_categorias") or []
+        for cat in cats:
+            if cat in cats_rv:
+                linhas.append({
+                    "setor": row["_setor"],
+                    "categoria": cat,
+                    "volume": row["_volume"],
+                    "mes_ref": mes_ref,
+                })
+
+    if not linhas:
+        return
+
+    df_rv = pd.DataFrame(linhas)
+    resultado = (
+        df_rv.groupby(["setor", "categoria", "mes_ref"])["volume"]
+        .sum()
+        .reset_index()
+    )
+    resultado["volume"] = resultado["volume"].round(2)
+    sobrescrever_aba("rv_volume", resultado)
+    print(f"  ✅ Volume RV: {len(resultado)} linhas")
+
+# ─── RV — FATURAMENTO MKTP (030509) ──────────────────────────────────────────
+
+def processar_faturamento_mktp(conteudo_bytes):
+    """
+    Processa o arquivo 030509 (faturamento consolidado por cliente/produto).
+    Usado para calcular GMV Marketplace do mês.
+    Colunas: Cliente/Tipo Marca/Cod.Produto/Desc.Produto/Unidade/Quantidade/
+             Qt Unit/Total Venda/Menor Preco/Preco Medio/PM/Ad.Esc./Pm Prazo/
+             NF Pr.Min.Venda/Vendedor/Preco Medio/Objetivo/Empresa/Filial
+    """
+    print("📂 Processando faturamento Mktp (030509)...")
+    df = ler_csv_inf(conteudo_bytes)
+    df.columns = [c.strip() for c in df.columns]
+
+    # Normaliza setor pelo campo Vendedor
+    df["_setor"] = df["Vendedor"].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+
+    # Normaliza cod produto
+    df["_cod_prod"] = df["Cod.Produto"].str.strip()
+
+    # Total Venda: remove pontos de milhar e troca vírgula por ponto
+    df["_total_venda"] = (
+        df["Total Venda"]
+        .str.replace(".", "", regex=False)
+        .str.replace(",", ".", regex=False)
+        .str.strip()
+    )
+    df["_total_venda"] = pd.to_numeric(df["_total_venda"], errors="coerce").fillna(0)
+
+    # Carrega mapa de categorias para filtrar só MKTP
+    df_prods = ler_aba("produtos_base")
+    mapa_cats = {}
+    if not df_prods.empty and "cod" in df_prods.columns:
+        for _, row in df_prods.iterrows():
+            cod = str(row.get("cod","")).strip()
+            cats = str(row.get("categorias","")).strip()
+            if cod and "MKTP" in cats.upper():
+                mapa_cats[cod] = True
+
+    # Filtra só produtos MKTP
+    df["_is_mktp"] = df["_cod_prod"].map(mapa_cats).fillna(False)
+    df_mktp = df[df["_is_mktp"]]
+
+    # Agrega por setor
+    resumo = (
+        df_mktp.groupby("_setor")["_total_venda"]
+        .sum()
+        .reset_index()
+        .rename(columns={"_setor": "setor", "_total_venda": "gmv_mktp_real"})
+    )
+    resumo["gmv_mktp_real"] = resumo["gmv_mktp_real"].round(2)
+    resumo["mes_referencia"] = date.today().strftime("%Y-%m")
+
+    sobrescrever_aba("rv_mktp", resumo)
+    atualizar_status_arquivo("030509 (Faturamento Mktp)", "✅ OK", f"{len(resumo)} setores processados")
+    print(f"  ✅ Faturamento Mktp: {len(resumo)} setores")
+    return resumo
+
+
+# ─── RV — PONTOS BEES (Excel BI) ─────────────────────────────────────────────
+
+def processar_pontos_bees(conteudo_bytes):
+    """
+    Processa o Excel do BI de pontos Bees.
+    Cabeçalho: Código Setor | Segmento RN | Coins Total
+    """
+    import io
+    print("📂 Processando pontos Bees...")
+    try:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str)
+    except Exception:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+
+    df.columns = [c.strip() for c in df.columns]
+
+    # Tenta encontrar as colunas certas mesmo com variações de nome
+    col_setor = next((c for c in df.columns if "setor" in c.lower() or "código" in c.lower() or "codigo" in c.lower()), df.columns[0])
+    col_coins = next((c for c in df.columns if "coins" in c.lower() or "pontos" in c.lower() or "total" in c.lower()), df.columns[2])
+
+    df["_setor"] = df[col_setor].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+
+    df["_coins"] = pd.to_numeric(
+        df[col_coins].str.replace(",", ".").str.replace(".", "", 1),
+        errors="coerce"
+    ).fillna(0)
+
+    # Tenta converter corretamente número com separador BR
+    def parse_br(val):
+        try:
+            s = str(val).strip().replace(" ", "")
+            if "," in s and "." in s:
+                s = s.replace(".", "").replace(",", ".")
+            elif "," in s:
+                s = s.replace(",", ".")
+            return float(s)
+        except:
+            return 0.0
+
+    df["_coins"] = df[col_coins].apply(parse_br)
+
+    resultado = df[["_setor", "_coins"]].rename(columns={
+        "_setor": "setor",
+        "_coins": "pontos_real"
+    })
+    resultado["mes_referencia"] = date.today().strftime("%Y-%m")
+    resultado["pontos_meta"] = 100000  # fixo, alterar no código se mudar
+
+    sobrescrever_aba("rv_pontos", resultado)
+    atualizar_status_arquivo("Pontos Bees (BI)", "✅ OK", f"{len(resultado)} setores processados")
+    print(f"  ✅ Pontos Bees: {len(resultado)} setores")
+    return resultado
+
+
+# ─── RV — VOLUME POR CATEGORIA ───────────────────────────────────────────────
+
+def calcular_rv_volume(mes_referencia=None):
+    """
+    Calcula volume real por setor/categoria a partir dos pedidos já processados.
+    Gera a aba rv_volume com: setor | categoria | volume_real_hl | mes_referencia
+    """
+    print("📂 Calculando RV volume...")
+    df_cob = ler_aba("cobertura")
+    if df_cob.empty:
+        print("  ⚠️ Aba cobertura vazia")
+        return pd.DataFrame()
+
+    # Usa pedidos faturados já processados — pega da aba pdv_mix que tem volume
+    df_mix = ler_aba("pdv_mix")
+    if df_mix.empty:
+        print("  ⚠️ Aba pdv_mix vazia")
+        return pd.DataFrame()
+
+    cats_rv = ["CERVEJA", "CERVEJA ZERO", "GIRO RGB", "HE", "HE RGB",
+               "NAB", "NAB ZERO", "MATCH", "MKTP", "BALANCED CHOICE",
+               "TRIMARCA RGB HE (Original)", "TRIMARCA RGB HE (Stella)", "TRIMARCA RGB HE (Spaten)"]
+
+    # Agrupa volume por setor e categoria macro
+    MAPA_MACRO = {
+        "CERVEJA": "CERVEJA", "CERVEJA ZERO": "CERVEJA", "CERVEJA MULTIPACK": "CERVEJA",
+        "GIRO RGB": "CERVEJA", "HE": "CERVEJA", "HE RGB": "CERVEJA",
+        "TRIMARCA RGB HE (Original)": "CERVEJA", "TRIMARCA RGB HE (Stella)": "CERVEJA",
+        "TRIMARCA RGB HE (Spaten)": "CERVEJA",
+        "NAB": "NAB", "NAB ZERO": "NAB",
+        "MATCH": "MATCH",
+        "MKTP": "MKTP",
+        "BALANCED CHOICE": "CERVEJA",
+        "LITRINHO": "CERVEJA",
+    }
+
+    df_mix["_cat_macro"] = df_mix["categoria"].map(MAPA_MACRO)
+    df_mix = df_mix[df_mix["_cat_macro"].notna()]
+
+    df_mix["_vol"] = pd.to_numeric(df_mix["volume_total_hl"], errors="coerce").fillna(0)
+
+    resultado = (
+        df_mix.groupby(["setor", "_cat_macro"])["_vol"]
+        .sum()
+        .reset_index()
+        .rename(columns={"_cat_macro": "categoria", "_vol": "volume_real_hl"})
+    )
+    resultado["mes_referencia"] = mes_referencia or date.today().strftime("%Y-%m")
+    resultado["volume_real_hl"] = resultado["volume_real_hl"].round(3)
+
+    sobrescrever_aba("rv_volume", resultado)
+    print(f"  ✅ RV Volume: {len(resultado)} linhas")
+    return resultado
+
+# ─── RV — REMUNERAÇÃO VARIÁVEL ───────────────────────────────────────────────
+
+META_PONTOS_BEES = 100_000  # Fixo. Alterar aqui se mudar.
+
+SEGMENTO_OFF = {"101", "102", "103"}  # Match ativo, Mktp inativo
+SEGMENTO_ON  = {"104", "105", "106", "301", "302", "303", "304", "305"}  # Mktp ativo, Match inativo
+
+
+def processar_faturamento_mktp(conteudo_bytes):
+    """
+    Processa o arquivo 030509 (faturamento consolidado).
+    Usa apenas: Vendedor, Cod.Produto, Total Venda.
+    Filtra por categoria MKTP/MKTPLACE.
+    """
+    print("📂 Processando faturamento Mktp (030509)...")
+    df = ler_csv_inf(conteudo_bytes)
+    df.columns = [c.strip() for c in df.columns]
+
+    # Normaliza setor pelo campo Vendedor
+    df["_setor"] = df["Vendedor"].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+
+    # Normaliza Total Venda
+    df["_total_venda"] = (
+        df["Total Venda"]
+        .str.replace(".", "", regex=False)
+        .str.replace(",", ".", regex=False)
+        .str.strip()
+    )
+    df["_total_venda"] = pd.to_numeric(df["_total_venda"], errors="coerce").fillna(0)
+
+    # Carrega mapa de categorias para filtrar só Mktp
+    df_prods = ler_aba("produtos_base")
+    mapa_cat = {}
+    if not df_prods.empty and "cod" in df_prods.columns:
+        for _, row in df_prods.iterrows():
+            cod = str(row.get("cod", "")).strip()
+            cats = str(row.get("categorias", "")).strip()
+            if cod and "MKTP" in cats.upper():
+                mapa_cat[cod] = "MKTP"
+
+    df["_cod_prod"] = df["Cod.Produto"].str.strip().str.lstrip("0")
+    df["_categoria"] = df["_cod_prod"].map(mapa_cat)
+    df_mktp = df[df["_categoria"] == "MKTP"].copy()
+
+    # Agrega por setor
+    resultado = (
+        df_mktp.groupby("_setor")["_total_venda"]
+        .sum()
+        .reset_index()
+        .rename(columns={"_setor": "setor", "_total_venda": "faturamento_mktp_real"})
+    )
+    resultado["mes_referencia"] = date.today().strftime("%Y-%m")
+    resultado["faturamento_mktp_real"] = resultado["faturamento_mktp_real"].round(2)
+
+    sobrescrever_aba("rv_faturamento_mktp", resultado)
+    atualizar_status_arquivo("030509 (Faturamento Mktp)", "✅ OK", f"{len(resultado)} setores processados")
+    print(f"  ✅ Faturamento Mktp: {len(resultado)} setores")
+    return resultado
+
+
+def processar_pontos_bees(conteudo_bytes):
+    """
+    Processa o Excel do BI de pontos Bees.
+    Cabeçalho: Código Setor | Segmento RN | Coins Total
+    """
+    import io
+    print("📂 Processando Pontos Bees...")
+    try:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str)
+    except Exception:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+
+    df.columns = [c.strip() for c in df.columns]
+
+    # Tenta identificar colunas por nome aproximado
+    col_setor = next((c for c in df.columns if "setor" in c.lower() or "código" in c.lower() or "codigo" in c.lower()), df.columns[0])
+    col_pontos = next((c for c in df.columns if "coins" in c.lower() or "ponto" in c.lower() or "total" in c.lower()), df.columns[-1])
+
+    df["_setor"] = df[col_setor].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+
+    df["_pontos"] = pd.to_numeric(
+        df[col_pontos].str.replace(",", ".", regex=False).str.strip(),
+        errors="coerce"
+    ).fillna(0)
+
+    resultado = df[["_setor", "_pontos"]].rename(
+        columns={"_setor": "setor", "_pontos": "pontos_real"}
+    )
+    resultado["pontos_meta"] = META_PONTOS_BEES
+    resultado["pct_atingimento"] = (resultado["pontos_real"] / META_PONTOS_BEES * 100).round(1)
+    resultado["mes_referencia"] = date.today().strftime("%Y-%m")
+
+    sobrescrever_aba("rv_pontos_bees", resultado)
+    atualizar_status_arquivo("Pontos Bees (BI)", "✅ OK", f"{len(resultado)} setores processados")
+    print(f"  ✅ Pontos Bees: {len(resultado)} setores")
+    return resultado
+
+
+def calcular_rv_completa():
+    """
+    Calcula a RV completa para todos os RNs com base nos dados já processados.
+    Grava na aba rv_resultado.
+    """
+    print("📊 Calculando RV completa...")
+
+    # Carrega todas as fontes
+    df_metas     = ler_aba("metas")
+    df_cobertura = ler_aba("cobertura")
+    df_pedidos   = ler_aba("rank_clientes")  # volume por setor
+    df_pontos    = ler_aba("rv_pontos_bees")
+    df_mktp      = ler_aba("rv_faturamento_mktp")
+    df_ap        = ler_aba("rv_ap")
+
+    # Mapa de metas por setor/categoria
+    metas_map = {}
+    po_total_map = {}
+    for _, row in df_metas.iterrows():
+        setor = str(row.get("setor", "")).strip()
+        cat   = str(row.get("categoria", "")).strip().upper()
+        meta  = pd.to_numeric(str(row.get("meta_volume", "0")).replace(",","."), errors="coerce") or 0
+        peso  = pd.to_numeric(str(row.get("peso", "0")).replace(",","."), errors="coerce") or 0
+        if setor not in metas_map:
+            metas_map[setor] = {}
+        metas_map[setor][cat] = {"meta": meta, "peso": peso}
+        if cat == "PO_TOTAL":
+            po_total_map[setor] = meta
+
+    # Mapa de pontos Bees
+    pontos_map = {}
+    for _, row in df_pontos.iterrows():
+        pontos_map[str(row.get("setor","")).strip()] = float(row.get("pontos_real", 0) or 0)
+
+    # Mapa de faturamento Mktp
+    mktp_map = {}
+    for _, row in df_mktp.iterrows():
+        mktp_map[str(row.get("setor","")).strip()] = float(row.get("faturamento_mktp_real", 0) or 0)
+
+    # Mapa AP (atendimento produtivo)
+    ap_map = {}
+    for _, row in df_ap.iterrows():
+        ap_map[str(row.get("setor","")).strip()] = str(row.get("ap_ok","NOK")).strip().upper()
+
+    # Volume por setor (dos pedidos - últimos dados disponíveis)
+    vol_map = {}
+    for _, row in df_cobertura.iterrows():
+        setor = str(row.get("setor","")).strip()
+        cat   = str(row.get("categoria","")).strip().upper()
+        # Conta PDVs OK como proxy de volume — volume real vem dos pedidos
+        pass
+
+    # Calcula por setor
+    resultados = []
+    todos_setores = list(SEGMENTO_OFF | SEGMENTO_ON)
+
+    for setor in todos_setores:
+        segmento = "OFF" if setor in SEGMENTO_OFF else "ON"
+        ap_ok = ap_map.get(setor, "NOK")
+        po_total = po_total_map.get(setor, 1500.0)
+
+        # Pontos Bees (50% do PO)
+        pontos_real = pontos_map.get(setor, 0)
+        pontos_meta = META_PONTOS_BEES
+        pct_pontos  = min((pontos_real / pontos_meta * 100) if pontos_meta > 0 else 0, 150)
+        peso_pontos = metas_map.get(setor, {}).get("PONTOS BEES", {}).get("peso", 50)
+        rv_pontos   = (po_total * peso_pontos / 100) * (pct_pontos / 100) if ap_ok == "OK" else 0
+
+        # Volume Cerveja
+        meta_cerv  = metas_map.get(setor, {}).get("CERVEJA", {}).get("meta", 0)
+        peso_cerv  = metas_map.get(setor, {}).get("CERVEJA", {}).get("peso", 0)
+
+        # Volume NAB
+        meta_nab   = metas_map.get(setor, {}).get("NAB", {}).get("meta", 0)
+        peso_nab   = metas_map.get(setor, {}).get("NAB", {}).get("peso", 0)
+
+        # Match (OFF) ou Mktp (ON)
+        if segmento == "OFF":
+            meta_var  = metas_map.get(setor, {}).get("MATCH", {}).get("meta", 0)
+            peso_var  = metas_map.get(setor, {}).get("MATCH", {}).get("peso", 0)
+            var_label = "MATCH"
+        else:
+            meta_var  = metas_map.get(setor, {}).get("MARKETPLACE", {}).get("meta", 0)
+            peso_var  = metas_map.get(setor, {}).get("MARKETPLACE", {}).get("peso", 0)
+            var_label = "MARKETPLACE"
+
+        resultados.append({
+            "setor":          setor,
+            "segmento":       segmento,
+            "ap_ok":          ap_ok,
+            "po_total":       po_total,
+            "pontos_real":    pontos_real,
+            "pontos_meta":    pontos_meta,
+            "pct_pontos":     round(pct_pontos, 1),
+            "peso_pontos":    peso_pontos,
+            "rv_pontos":      round(rv_pontos, 2),
+            "meta_cerveja":   meta_cerv,
+            "peso_cerveja":   peso_cerv,
+            "meta_nab":       meta_nab,
+            "peso_nab":       peso_nab,
+            f"meta_{var_label.lower()}": meta_var,
+            f"peso_{var_label.lower()}": peso_var,
+            "indicador_variavel": var_label,
+            "mes_referencia": date.today().strftime("%Y-%m"),
+        })
+
+    df_resultado = pd.DataFrame(resultados)
+    sobrescrever_aba("rv_resultado", df_resultado)
+    print(f"  ✅ RV calculada: {len(df_resultado)} setores")
+    return df_resultado
