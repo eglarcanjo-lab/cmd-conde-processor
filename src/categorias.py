@@ -86,11 +86,7 @@ def resolver_categoria(cod_prod, cat_bruta, desc_produto, cod_marca_str):
         if cod.lstrip("0") == cod_marca and "600" in desc:
             return cat_tri
 
-    # 3. Litrinho por descrição (GFA VD 300ML = retornável 300ml)
-    if "GFA VD 300ML" in desc or "GFA VD 300" in desc:
-        return "LITRINHO"
-
-    # 4. Cerveja sem embalagem RGB (lata, long neck etc)
+    # 3. Cerveja sem embalagem RGB (lata, long neck etc) - LITRINHO só via produtos_base
     if cat == "CERVEJA":
         return "CERVEJA"
 

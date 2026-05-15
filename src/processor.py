@@ -183,18 +183,12 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
 
     # Resolver categoria de cada linha
     def get_cats(row):
-        """Retorna lista de categorias para o produto."""
+        """Retorna lista de categorias — SOMENTE da produtos_base cadastrada pelo admin."""
         cod = str(row.get("Cod. Prod.", "")).strip()
         cats_sheet = mapa_produtos.get(cod)
-        if cats_sheet:
-            return cats_sheet  # lista de categorias
-        cat_unica = resolver_categoria(
-            cod,
-            row.get("Cat_Funda", ""),
-            row.get("Nome Prod.", ""),
-            row.get("Código Marca", ""),
-        )
-        return [cat_unica] if cat_unica else []
+        if cats_sheet and isinstance(cats_sheet, list):
+            return cats_sheet
+        return []  # Sem categoria cadastrada = não contabiliza
 
     df["_categorias"] = df.apply(get_cats, axis=1)
     # Para compatibilidade: _categoria = primeira categoria da lista
