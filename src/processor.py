@@ -200,7 +200,7 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     )
 
     # Normalizar cod cliente
-    df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0")
+    df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0").str.strip()
 
     hoje = date.today()
     mes_atual = hoje.replace(day=1)
@@ -249,17 +249,19 @@ def _processar_cobertura(df_atual, df_ant, df_clientes):
         for cat in (row.get("_categorias") or []):
             pend_set.add((row["_cod_pdv"], cat))
 
-    # Base de PDVs
+    # Base de PDVs vem da base de clientes
     if df_clientes is not None and not df_clientes.empty:
         pdvs = df_clientes[["cod_pdv", "nome_fantasia", "setor"]].drop_duplicates()
     else:
-        todos_pdvs = pd.concat([df_atual, df_ant])[["_cod_pdv", "_setor"]].drop_duplicates()
-        pdvs = todos_pdvs.rename(columns={"_cod_pdv": "cod_pdv", "_setor": "setor"})
-        pdvs["nome_fantasia"] = ""
+        todos_pdvs = pd.concat([df_atual, df_ant])[["_cod_pdv", "_setor", "Nome Cliente"]].drop_duplicates(subset=["_cod_pdv"])
+        pdvs = todos_pdvs.rename(columns={"_cod_pdv": "cod_pdv", "_setor": "setor", "Nome Cliente": "nome_fantasia"})
 
     linhas = []
     for _, pdv in pdvs.iterrows():
-        cod = pdv["cod_pdv"]
+        # Normaliza cod_pdv: remove zeros e espaços, converte para string limpa
+        cod = str(pdv["cod_pdv"]).strip().lstrip("0") or "0"
+        setor = str(pdv.get("setor", pdv.get("_setor", ""))).strip()
+        nome = str(pdv.get("nome_fantasia", "")).strip()
         for cat in cats:
             if (cod, cat) in ok_set:
                 status = "OK"
@@ -269,9 +271,9 @@ def _processar_cobertura(df_atual, df_ant, df_clientes):
                 status = "NOK"
 
             linhas.append({
-                "setor": pdv["setor"],
+                "setor": setor,
                 "cod_pdv": cod,
-                "nome_fantasia": pdv.get("nome_fantasia", ""),
+                "nome_fantasia": nome,
                 "categoria": cat,
                 "status": status,
                 "mes_referencia": date.today().strftime("%Y-%m"),
@@ -438,7 +440,7 @@ def processar_inadimplencia(conteudo_bytes):
     df = df[df["_setor"].isin(SETORES_VALIDOS)]
 
     # Normaliza cod PDV
-    df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0")
+    df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0").str.strip()
     df["_nome"] = df["Nome"].str.strip()
 
     # Dias: valores negativos = vencido, positivos = a vencer

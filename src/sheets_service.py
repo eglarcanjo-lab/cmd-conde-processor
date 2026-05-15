@@ -61,9 +61,32 @@ def sobrescrever_aba(nome_aba, df):
         ws.update([df.columns.tolist()])
         return
 
-    df = df.fillna("").astype(str)
-    data = [df.columns.tolist()] + df.values.tolist()
-    ws.update(data)
+    df = df.fillna("")
+    
+    # Converte colunas numéricas para número (evita apóstrofo no Sheets)
+    for col in df.columns:
+        try:
+            converted = pd.to_numeric(df[col], errors='coerce')
+            # Se mais de 50% converteu, trata como numérica
+            if converted.notna().sum() / max(len(df), 1) > 0.5:
+                df[col] = converted.where(converted.notna(), df[col])
+        except:
+            pass
+    
+    # Converte para lista — numéricos ficam como número, resto como string
+    def cell_value(v):
+        if pd.isna(v):
+            return ""
+        if isinstance(v, (int, float)):
+            return v
+        return str(v)
+    
+    rows = []
+    for _, row in df.iterrows():
+        rows.append([cell_value(v) for v in row])
+    
+    data = [df.columns.tolist()] + rows
+    ws.update(data, value_input_option="RAW")
     print(f"  ✅ Aba '{nome_aba}' atualizada: {len(df)} linhas")
 
 
