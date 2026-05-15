@@ -96,17 +96,29 @@ def resolver_categoria(cod_prod, cat_bruta, desc_produto, cod_marca_str):
 
 def carregar_base_produtos(df_base):
     """
-    Carrega a base de produtos do Sheets (aba produtos_base)
-    e retorna dict {cod_prod: categoria_app}
+    Carrega a base de produtos do Sheets (aba produtos_base).
+    Retorna dict {cod_prod: [lista_de_categorias]}
+    Suporta múltiplas categorias separadas por | (pipe).
+    Aceita coluna 'categorias' ou 'categoria'.
     """
     mapa = {}
     for _, row in df_base.iterrows():
         cod = str(row.get("cod", "")).strip()
-        cat = str(row.get("categoria", "")).strip()
-        if cod and cat and cat not in ("0", "#N/D", ""):
-            cat_resolvida = MAPA_CATEGORIA_BRUTA.get(cat, None)
-            if cat_resolvida:
-                mapa[cod] = cat_resolvida
-            elif cat in CATEGORIAS_VALIDAS:
-                mapa[cod] = cat
+        # Aceita tanto 'categorias' quanto 'categoria'
+        cats_raw = str(row.get("categorias", row.get("categoria", ""))).strip()
+        if not cod or not cats_raw or cats_raw in ("0", "#N/D", "", "nan", "None"):
+            continue
+        # Suporta múltiplas categorias separadas por |
+        cats = [c.strip() for c in cats_raw.split("|") if c.strip()]
+        cats_validas = []
+        for cat in cats:
+            if cat in CATEGORIAS_VALIDAS:
+                cats_validas.append(cat)
+            else:
+                resolvida = MAPA_CATEGORIA_BRUTA.get(cat)
+                if resolvida:
+                    cats_validas.append(resolvida)
+        if cats_validas:
+            mapa[cod] = cats_validas
+    print(f"  📦 produtos_base carregada: {len(mapa)} produtos com categoria")
     return mapa
