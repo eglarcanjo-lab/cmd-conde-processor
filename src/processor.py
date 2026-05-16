@@ -1133,11 +1133,13 @@ def processar_visitacao_gv(conteudo_bytes):
     df.columns = [c.strip() for c in df.columns]
 
     # Seleciona colunas relevantes
-    col_gv      = next((c for c in df.columns if c.upper() == "GV"), None)
-    col_setor   = next((c for c in df.columns if c.upper() == "SETOR"), None)
-    col_pdv     = next((c for c in df.columns if c.upper() == "PDV"), None)
-    col_visita  = next((c for c in df.columns if "VISITA" in c.upper() and "VALID" in c.upper()), None)
+    col_gv      = next((c for c in df.columns if c.strip().upper() == "GV"), None)
+    col_setor   = next((c for c in df.columns if c.strip().upper() == "SETOR"), None)
+    col_pdv     = next((c for c in df.columns if c.strip().upper() == "PDV"), None)
+    col_visita  = next((c for c in df.columns if "VISIT" in c.upper()), None)
     col_gps     = next((c for c in df.columns if "GPS" in c.upper()), None)
+
+    print(f"  Colunas encontradas: gv={col_gv}, setor={col_setor}, pdv={col_pdv}, visita={col_visita}, gps={col_gps}")
 
     if not all([col_gv, col_setor, col_pdv, col_visita, col_gps]):
         raise ValueError(f"Colunas não encontradas. Disponíveis: {df.columns.tolist()}")
