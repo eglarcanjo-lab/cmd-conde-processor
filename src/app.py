@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -107,6 +107,14 @@ def upload_ambos():
         except Exception as e:
             traceback.print_exc()
             resultados["faturamento_mktp"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "spo_coaching" in arquivos:
+        try:
+            processar_rota_coaching(arquivos["spo_coaching"].read())
+            resultados["spo_coaching"] = "✅ Rota Coaching processada"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["spo_coaching"] = f"❌ Erro: {str(e)[:100]}"
 
     if "spo_visitacao_gv" in arquivos:
         try:
@@ -276,6 +284,19 @@ def upload_spo_visitacao_gv():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("SPO - Visitação GV", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/spo-coaching", methods=["POST"])
+def upload_spo_coaching():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
+    try:
+        df = processar_rota_coaching(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Rota Coaching: {len(df)} registros."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("SPO - Rota Coaching", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 

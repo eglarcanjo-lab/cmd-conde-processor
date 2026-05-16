@@ -1199,3 +1199,96 @@ def processar_visitacao_gv(conteudo_bytes):
     atualizar_status_arquivo("SPO - Visitação GV", "✅ OK", f"{len(df_out)} linhas processadas")
     print(f"  ✅ Visitação GV processada: {len(df_out)} linhas")
     return df_out
+
+
+# ─── SPO — ROTA COACHING ────────────────────────────────────────────────────
+
+META_COACHING_TRI = 18  # 6 por mês × 3 meses
+
+def processar_rota_coaching(conteudo_bytes):
+    """
+    Processa o relatório de Rota Coaching (Detalhamento Visitas).
+    Filtra Tipo Visita = COACHING e Coaching Dia = OK.
+    Calcula coachings válidos por GV e RNs cobertos no tri.
+    """
+    import io
+    print("📂 Processando Rota Coaching (SPO Item 2)...")
+
+    try:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str, sheet_name="Export")
+    except Exception:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+
+    df.columns = [c.strip() for c in df.columns]
+
+    # Filtra só COACHING
+    df = df[df["Tipo Visita"].str.strip().str.upper() == "COACHING"].copy()
+
+    df["_gv"]     = df["GV"].str.strip()
+    df["_setor"]  = df["Setor"].str.strip()
+    df["_data"]   = pd.to_datetime(df["Data Visita"], errors="coerce").dt.strftime("%Y-%m-%d")
+    df["_ok"]     = df["Coaching Dia"].str.strip().str.upper() == "OK"
+    df["_mes"]    = pd.to_datetime(df["Data Visita"], errors="coerce").dt.strftime("%Y-%m")
+
+    # Detalhe: um registro por GV × RN × data
+    df_det = df[["_gv", "_setor", "_data", "_mes", "_ok", "TMV Rota Dia", "Coachings Validos Dia", "Validação Segmento Coaching"]].copy()
+    df_det.columns = ["gv", "setor", "data_visita", "mes_referencia", "coaching_ok", "tmv_rota", "coachings_validos", "validacao_segmento"]
+    df_det["coaching_ok"] = df_det["coaching_ok"].map({True: "SIM", False: "NÃO"})
+
+    sobrescrever_aba("spo_coaching_detalhe", df_det)
+
+    # Resumo por GV — visão mensal + acumulado trimestral
+    resumo = []
+    meses_unicos = sorted(df["_mes"].dropna().unique())
+    total_rns_por_gv = {"1": 6, "3": 5}  # GV1=sala1(6RNs), GV3=sala2(5RNs)
+
+    for gv in sorted(df["_gv"].dropna().unique()):
+        df_gv = df[df["_gv"] == gv]
+        total_rns_sala = total_rns_por_gv.get(str(gv), 5)
+
+        # === MENSAL ===
+        for mes in meses_unicos:
+            df_mes = df_gv[df_gv["_mes"] == mes]
+            validos_mes = df_mes[df_mes["_ok"]].groupby(["_setor", "_data"]).size().reset_index()
+            coachings_mes = len(validos_mes)
+            rns_mes = df_mes[df_mes["_ok"]]["_setor"].nunique()
+            pct_mes = round((coachings_mes / 6) * 100, 1)  # meta mensal = 6
+
+            resumo.append({
+                "gv": gv,
+                "periodo": "mensal",
+                "mes_referencia": mes,
+                "coachings_validos": coachings_mes,
+                "meta": 6,
+                "pct": pct_mes,
+                "rns_cobertos": rns_mes,
+                "total_rns_sala": total_rns_sala,
+                "gv_ok": "OK" if coachings_mes >= 6 else "NOK",
+            })
+
+        # === TRIMESTRAL (acumulado) ===
+        validos_tri = df_gv[df_gv["_ok"]].groupby(["_setor", "_data"]).size().reset_index()
+        total_tri = len(validos_tri)
+        rns_tri = df_gv[df_gv["_ok"]]["_setor"].nunique()
+        pct_tri = round((total_tri / META_COACHING_TRI) * 100, 1)
+        gv_ok_tri = total_tri >= META_COACHING_TRI and rns_tri >= total_rns_sala
+        mes_ref_tri = meses_unicos[-1] if meses_unicos else date.today().strftime("%Y-%m")
+
+        resumo.append({
+            "gv": gv,
+            "periodo": "trimestral",
+            "mes_referencia": mes_ref_tri,
+            "coachings_validos": total_tri,
+            "meta": META_COACHING_TRI,
+            "pct": pct_tri,
+            "rns_cobertos": rns_tri,
+            "total_rns_sala": total_rns_sala,
+            "gv_ok": "OK" if gv_ok_tri else "NOK",
+        })
+        print(f"  GV {gv}: TRI={total_tri}/{META_COACHING_TRI} ({pct_tri}%) | RNs: {rns_tri}/{total_rns_sala} | {'OK' if gv_ok_tri else 'NOK'}")
+
+    df_resumo = pd.DataFrame(resumo)
+    sobrescrever_aba("spo_coaching_resumo", df_resumo)
+    atualizar_status_arquivo("SPO - Rota Coaching", "✅ OK", f"{len(df_det)} registros processados")
+    print(f"  ✅ Rota Coaching processada: {len(df_det)} registros")
+    return df_det
