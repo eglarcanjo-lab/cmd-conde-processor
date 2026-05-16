@@ -1110,3 +1110,85 @@ def calcular_rv_completa():
     sobrescrever_aba("rv_resultado", df_resultado)
     print(f"  ✅ RV calculada: {len(df_resultado)} setores")
     return df_resultado
+
+
+# ─── SPO — VISITAÇÃO GV NA BASE FOCO ────────────────────────────────────────
+
+META_VISITACAO_GV = 36  # PDVs distintos por GV por mês (ON Trade)
+
+def processar_visitacao_gv(conteudo_bytes):
+    """
+    Processa o relatório de Visitação GV na Base Foco.
+    Colunas usadas: GV | SETOR | PDV | Visita Válida | GPS GV
+    Uma visita é válida quando Visita Válida = OK e GPS GV = OK.
+    """
+    import io
+    print("📂 Processando Visitação GV (SPO Item 1)...")
+
+    try:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str, sheet_name="Export")
+    except Exception:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+
+    df.columns = [c.strip() for c in df.columns]
+
+    # Seleciona colunas relevantes
+    col_gv      = next((c for c in df.columns if c.upper() == "GV"), None)
+    col_setor   = next((c for c in df.columns if c.upper() == "SETOR"), None)
+    col_pdv     = next((c for c in df.columns if c.upper() == "PDV"), None)
+    col_visita  = next((c for c in df.columns if "VISITA" in c.upper() and "VALID" in c.upper()), None)
+    col_gps     = next((c for c in df.columns if "GPS" in c.upper()), None)
+
+    if not all([col_gv, col_setor, col_pdv, col_visita, col_gps]):
+        raise ValueError(f"Colunas não encontradas. Disponíveis: {df.columns.tolist()}")
+
+    df["_gv"]     = df[col_gv].str.strip()
+    df["_setor"]  = df[col_setor].str.strip()
+    df["_pdv"]    = df[col_pdv].str.strip().str.lstrip("0")
+    df["_visita"] = df[col_visita].str.strip().str.upper()
+    df["_gps"]    = df[col_gps].str.strip().str.upper()
+    df["_valida"] = (df["_visita"] == "OK") & (df["_gps"] == "OK")
+
+    # Carrega nomes dos PDVs da pdv_base
+    try:
+        df_base = ler_aba("pdv_base")
+        mapa_nomes = {}
+        if not df_base.empty:
+            for _, row in df_base.iterrows():
+                cod = str(row.get("cod_pdv", row.get("cod", ""))).strip().lstrip("0")
+                nome = str(row.get("nome_fantasia", row.get("nome", ""))).strip()
+                if cod:
+                    mapa_nomes[cod] = nome
+    except Exception:
+        mapa_nomes = {}
+
+    df["_nome_pdv"] = df["_pdv"].map(mapa_nomes).fillna("")
+    df["mes_referencia"] = date.today().strftime("%Y-%m")
+
+    # Grava detalhe linha por linha
+    df_out = df[["_gv", "_setor", "_pdv", "_nome_pdv", "_visita", "_gps", "_valida", "mes_referencia"]].copy()
+    df_out.columns = ["gv", "setor", "cod_pdv", "nome_pdv", "visita_ok", "gps_ok", "valida", "mes_referencia"]
+    df_out["valida"] = df_out["valida"].map({True: "SIM", False: "NÃO"})
+
+    sobrescrever_aba("spo_visitacao_gv", df_out)
+
+    # Resumo por GV
+    resumo = []
+    for gv in df_out["gv"].unique():
+        df_gv = df_out[df_out["gv"] == gv]
+        visitados = df_gv[df_gv["valida"] == "SIM"]["cod_pdv"].nunique()
+        pct = round((visitados / META_VISITACAO_GV) * 100, 1)
+        resumo.append({
+            "gv": gv,
+            "meta": META_VISITACAO_GV,
+            "visitados": visitados,
+            "pct": pct,
+            "mes_referencia": date.today().strftime("%Y-%m"),
+        })
+        print(f"  GV {gv}: {visitados}/{META_VISITACAO_GV} PDVs ({pct}%)")
+
+    df_resumo = pd.DataFrame(resumo)
+    sobrescrever_aba("spo_visitacao_gv_resumo", df_resumo)
+    atualizar_status_arquivo("SPO - Visitação GV", "✅ OK", f"{len(df_out)} linhas processadas")
+    print(f"  ✅ Visitação GV processada: {len(df_out)} linhas")
+    return df_out

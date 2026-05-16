@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -255,6 +255,19 @@ def calcular_rv():
         return jsonify({"success": True, "message": f"RV calculada: {len(df)} setores."})
     except Exception as e:
         traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/spo-visitacao-gv", methods=["POST"])
+def upload_spo_visitacao_gv():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
+    try:
+        df = processar_visitacao_gv(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Visitação GV: {len(df)} linhas."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("SPO - Visitação GV", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 
