@@ -1289,6 +1289,25 @@ def processar_rota_coaching(conteudo_bytes):
 
     df_resumo = pd.DataFrame(resumo)
     sobrescrever_aba("spo_coaching_resumo", df_resumo)
+    # RNs sem coaching no trimestre
+    todos_setores = {
+        "1": ["101","102","103","104","105","106"],
+        "3": ["301","302","303","304","305"],
+    }
+    rns_com_coaching = df[df["_ok"]].groupby("_gv")["_setor"].apply(set).to_dict()
+    mes_ref_tri = sorted(df["_mes"].dropna().unique())[-1] if len(df["_mes"].dropna().unique()) > 0 else date.today().strftime("%Y-%m")
+
+    sem_coaching = []
+    for gv, setores in todos_setores.items():
+        cobertos = rns_com_coaching.get(gv, set())
+        for setor in setores:
+            if setor not in cobertos:
+                sem_coaching.append({"gv": gv, "setor": setor, "mes_referencia": mes_ref_tri})
+
+    df_sem = pd.DataFrame(sem_coaching) if sem_coaching else pd.DataFrame(columns=["gv","setor","mes_referencia"])
+    sobrescrever_aba("spo_coaching_sem_coaching", df_sem)
+    print(f"  ⚠️ RNs sem coaching: {len(df_sem)}")
+
     atualizar_status_arquivo("SPO - Rota Coaching", "✅ OK", f"{len(df_det)} registros processados")
     print(f"  ✅ Rota Coaching processada: {len(df_det)} registros")
     return df_det
