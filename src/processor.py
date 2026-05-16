@@ -1426,3 +1426,98 @@ def processar_dto_gc(conteudo_bytes):
     atualizar_status_arquivo("SPO - DTO GC", "✅ OK", f"Matinal:{round(matinal_real)}/4 | Vesp:{round(vespertina_real)}/4 | Coach:{round(coaching_real)}/2")
     print(f"  ✅ DTO GC: Matinal {round(matinal_real)}/4 | Vespertina {round(vespertina_real)}/4 | Coaching {round(coaching_real)}/2 | Status: {resultado[0]['status_final']}")
     return df_out
+
+
+# ─── SPO — % VISITAS ABRINDO ABA DE PROMOÇÃO (Item 7) ───────────────────────
+
+META_PROMO_PCT = 10  # 10% das visitas
+
+def processar_aba_promocao(conteudo_bytes):
+    """
+    Processa relatório de acesso à aba de Promoção no BEES.
+    Colunas: unb_pdv | Visitas | Acesso Promoção | %Acesso Promoção | Meta | vs Meta
+    Cruza cod_pdv com aba tasks para obter setor.
+    """
+    import io
+    print("📂 Processando Aba Promoção BEES (SPO Item 7)...")
+
+    try:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str, sheet_name="Export")
+    except Exception:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+
+    df.columns = [c.strip() for c in df.columns]
+    df = df[df['unb_pdv'].notna() & df['Visitas'].notna()].copy()
+
+    # Extrai cod_pdv
+    df['_cod'] = df['unb_pdv'].str.split('_').str[-1].str.strip()
+    df['_visitas'] = pd.to_numeric(df['Visitas'], errors='coerce').fillna(0)
+    df['_acesso'] = pd.to_numeric(df['Acesso Promoção'], errors='coerce').fillna(0)
+
+    # Carrega mapa cod_pdv → setor e dia_visita da pdv_base (base de clientes)
+    mapa_setor = {}
+    mapa_dia = {}
+    try:
+        df_base = ler_aba("pdv_base")
+        if not df_base.empty:
+            for _, row in df_base.iterrows():
+                cod = str(row.get("cod_pdv", "")).strip()
+                setor = str(row.get("setor", "")).strip().lstrip("0")
+                dia = str(row.get("dia_visita", "")).strip()
+                if cod and setor:
+                    mapa_setor[cod] = setor
+                if cod and dia:
+                    mapa_dia[cod] = dia.split("/")[0].strip()
+    except Exception as e:
+        print(f"  ⚠️ Erro ao carregar pdv_base: {e}")
+
+    df['_setor'] = df['_cod'].map(mapa_setor).fillna("")
+    df['_dia_visita'] = df['_cod'].map(mapa_dia).fillna("")
+
+    # Detalhe por PDV
+    df_det = df[['_setor', '_cod', '_dia_visita', '_visitas', '_acesso']].copy()
+    df_det.columns = ['setor', 'cod_pdv', 'dia_visita', 'visitas', 'acesso_promo']
+    df_det['pct'] = (df_det['acesso_promo'] / df_det['visitas'].replace(0, 1) * 100).round(1)
+    df_det['mes_referencia'] = date.today().strftime("%Y-%m")
+    sobrescrever_aba("spo_promo_detalhe", df_det)
+
+    # Resumo por setor
+    setores_validos = SETORES_VALIDOS
+    df_setor = df[df['_setor'].isin(setores_validos)].copy()
+
+    resumo = []
+    for setor in sorted(df_setor['_setor'].unique()):
+        df_s = df_setor[df_setor['_setor'] == setor]
+        total_vis = df_s['_visitas'].sum()
+        total_ac = df_s['_acesso'].sum()
+        pct = round((total_ac / total_vis * 100) if total_vis > 0 else 0, 1)
+        resumo.append({
+            'setor': setor,
+            'visitas': int(total_vis),
+            'acesso_promo': int(total_ac),
+            'pct': pct,
+            'meta': META_PROMO_PCT,
+            'ok': "OK" if pct >= META_PROMO_PCT else "NOK",
+            'mes_referencia': date.today().strftime("%Y-%m"),
+        })
+        print(f"  Setor {setor}: {int(total_ac)}/{int(total_vis)} ({pct}%)")
+
+    # Total operação
+    total_op_vis = df['_visitas'].sum()
+    total_op_ac = df['_acesso'].sum()
+    pct_op = round((total_op_ac / total_op_vis * 100) if total_op_vis > 0 else 0, 1)
+    resumo.append({
+        'setor': 'OPERACAO',
+        'visitas': int(total_op_vis),
+        'acesso_promo': int(total_op_ac),
+        'pct': pct_op,
+        'meta': META_PROMO_PCT,
+        'ok': "OK" if pct_op >= META_PROMO_PCT else "NOK",
+        'mes_referencia': date.today().strftime("%Y-%m"),
+    })
+
+    df_resumo = pd.DataFrame(resumo)
+    sobrescrever_aba("spo_promo_resumo", df_resumo)
+    atualizar_status_arquivo("SPO - Aba Promoção", "✅ OK", f"Operação: {pct_op}% ({int(total_op_ac)}/{int(total_op_vis)} visitas)")
+    print(f"  ✅ Aba Promoção: {pct_op}% operação | {len([r for r in resumo if r['setor'] != 'OPERACAO'])} setores mapeados")
+    return df_det

@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -107,6 +107,14 @@ def upload_ambos():
         except Exception as e:
             traceback.print_exc()
             resultados["faturamento_mktp"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "spo_promo" in arquivos:
+        try:
+            processar_aba_promocao(arquivos["spo_promo"].read())
+            resultados["spo_promo"] = "✅ Aba Promoção processada"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["spo_promo"] = f"❌ Erro: {str(e)[:100]}"
 
     if "spo_dto" in arquivos:
         try:
@@ -318,6 +326,19 @@ def upload_spo_dto():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("SPO - DTO GC", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/spo-promo", methods=["POST"])
+def upload_spo_promo():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
+    try:
+        df = processar_aba_promocao(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Aba Promoção: {len(df)} PDVs."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("SPO - Aba Promoção", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 
