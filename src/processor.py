@@ -1201,6 +1201,7 @@ def processar_visitacao_gv(conteudo_bytes):
     return df_out
 
 
+# v2.5 - dias rota TT
 # ─── SPO — ROTA COACHING ────────────────────────────────────────────────────
 
 META_COACHING_TRI = 18  # 6 por mês × 3 meses
@@ -1222,7 +1223,7 @@ def processar_rota_coaching(conteudo_bytes):
     df.columns = [c.strip() for c in df.columns]
 
     # Filtra só COACHING
-    df = df[df["Tipo Visita"].str.strip().str.upper() == "COACHING"].copy()
+    df = df[df["Tipo Visita"].str.strip().str.upper().isin(["COACHING"])].copy()
 
     df["_gv"]     = df["GV"].str.strip()
     df["_setor"]  = df["Setor"].str.strip()
@@ -1289,6 +1290,56 @@ def processar_rota_coaching(conteudo_bytes):
 
     df_resumo = pd.DataFrame(resumo)
     sobrescrever_aba("spo_coaching_resumo", df_resumo)
+    # ── DIAS EM ROTA TT (Item 3) ────────────────────────────────────────────
+    # Usa o mesmo DataFrame — conta dias únicos com Dia em Rota Válido = OK
+    df_full = df.copy()  # df já está filtrado por COACHING, precisamos do arquivo completo
+    # Nota: df_full aqui é só coaching. O arquivo completo é processado abaixo via df_rota
+    # Calculamos dias em rota a partir do arquivo completo que foi passado
+    try:
+        df_rota = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str,
+                                sheet_name="Export" if "Export" in pd.ExcelFile(io.BytesIO(conteudo_bytes)).sheet_names else 0)
+    except Exception:
+        df_rota = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+
+    df_rota.columns = [c.strip() for c in df_rota.columns]
+    df_rota["_gv"]   = df_rota["GV"].str.strip()
+    df_rota["_data"] = pd.to_datetime(df_rota["Data Visita"], errors="coerce").dt.strftime("%Y-%m-%d")
+    df_rota["_mes"]  = pd.to_datetime(df_rota["Data Visita"], errors="coerce").dt.strftime("%Y-%m")
+    df_rota["_ok"]   = df_rota["Dia em Rota Válido"].str.strip().str.upper() == "OK"
+
+    resumo_rota = []
+    meses_rota = sorted(df_rota["_mes"].dropna().unique())
+
+    for gv in sorted(df_rota["_gv"].dropna().unique()):
+        df_gv_r = df_rota[df_rota["_gv"] == gv]
+
+        # Mensal
+        for mes in meses_rota:
+            df_m = df_gv_r[df_gv_r["_mes"] == mes]
+            dias_ok = df_m[df_m["_ok"]]["_data"].nunique()
+            pct = round((dias_ok / 15) * 100, 1)
+            resumo_rota.append({
+                "gv": gv, "periodo": "mensal", "mes_referencia": mes,
+                "dias_validos": dias_ok, "meta": 15, "pct": pct,
+                "gv_ok": "OK" if dias_ok >= 15 else "NOK",
+            })
+
+        # Trimestral
+        dias_ok_tri = df_gv_r[df_gv_r["_ok"]]["_data"].nunique()
+        pct_tri = round((dias_ok_tri / 45) * 100, 1)
+        resumo_rota.append({
+            "gv": gv, "periodo": "trimestral",
+            "mes_referencia": meses_rota[-1] if meses_rota else date.today().strftime("%Y-%m"),
+            "dias_validos": dias_ok_tri, "meta": 45, "pct": pct_tri,
+            "gv_ok": "OK" if dias_ok_tri >= 45 else "NOK",
+        })
+        print(f"  GV {gv} Dias Rota TT: {dias_ok_tri}/45 ({pct_tri}%)")
+
+    df_resumo_rota = pd.DataFrame(resumo_rota)
+    sobrescrever_aba("spo_dias_rota_resumo", df_resumo_rota)
+    atualizar_status_arquivo("SPO - Dias em Rota TT", "✅ OK", f"Calculado do mesmo arquivo")
+    # ────────────────────────────────────────────────────────────────────────
+
     # RNs sem coaching no trimestre
     todos_setores = {
         "1": ["101","102","103","104","105","106"],
