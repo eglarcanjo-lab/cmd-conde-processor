@@ -1362,3 +1362,67 @@ def processar_rota_coaching(conteudo_bytes):
     atualizar_status_arquivo("SPO - Rota Coaching", "✅ OK", f"{len(df_det)} registros processados")
     print(f"  ✅ Rota Coaching processada: {len(df_det)} registros")
     return df_det
+
+
+# ─── SPO — DTO GC x GV ──────────────────────────────────────────────────────
+
+META_DTO = {"matinal": 4, "vespertina": 4, "coaching": 2}
+
+def processar_dto_gc(conteudo_bytes):
+    """
+    Processa o relatório de DTO GC x GV.
+    Colunas: Status Final TRK | Matinal/Real/Status | Vespertina/Real/Status | Coaching/Real/Status
+    """
+    import io
+    print("📂 Processando DTO GC x GV (SPO Item 6)...")
+
+    try:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str, sheet_name="Export")
+    except Exception:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+
+    df.columns = [c.strip() for c in df.columns]
+
+    # Pega só a linha da CMD Conde
+    df = df[df["Operação Agrupada"].str.strip().str.upper() == "CMD CONDE"].copy()
+    if df.empty:
+        raise ValueError("CMD Conde não encontrada no relatório.")
+
+    row = df.iloc[0]
+
+    # Extrai período dos filtros no arquivo
+    mes_ref = date.today().strftime("%Y-%m")
+
+    def get_val(col):
+        try:
+            v = str(row.get(col, "0") or "0").strip()
+            return float(v.replace(",", ".")) if v not in ("", "nan", "NaN") else 0
+        except:
+            return 0
+
+    matinal_real   = get_val("Real vs TRK")
+    vespertina_real = get_val("Real vs TRK.1")
+    coaching_real  = get_val("Real vs TRK.2")
+
+    resultado = [{
+        "mes_referencia":     mes_ref,
+        "status_final":       str(row.get("Status Final TRK", "NOK")).strip(),
+        "matinal_meta":       META_DTO["matinal"],
+        "matinal_real":       round(matinal_real),
+        "matinal_pct":        round((matinal_real / META_DTO["matinal"]) * 100, 1),
+        "matinal_status":     str(row.get("Status Matinal", "NOK")).strip(),
+        "vespertina_meta":    META_DTO["vespertina"],
+        "vespertina_real":    round(vespertina_real),
+        "vespertina_pct":     round((vespertina_real / META_DTO["vespertina"]) * 100, 1),
+        "vespertina_status":  str(row.get("Status Vespertina", "NOK")).strip(),
+        "coaching_meta":      META_DTO["coaching"],
+        "coaching_real":      round(coaching_real),
+        "coaching_pct":       round((coaching_real / META_DTO["coaching"]) * 100, 1),
+        "coaching_status":    str(row.get("Status Rota Coaching", "NOK")).strip(),
+    }]
+
+    df_out = pd.DataFrame(resultado)
+    sobrescrever_aba("spo_dto_resumo", df_out)
+    atualizar_status_arquivo("SPO - DTO GC", "✅ OK", f"Matinal:{round(matinal_real)}/4 | Vesp:{round(vespertina_real)}/4 | Coach:{round(coaching_real)}/2")
+    print(f"  ✅ DTO GC: Matinal {round(matinal_real)}/4 | Vespertina {round(vespertina_real)}/4 | Coaching {round(coaching_real)}/2 | Status: {resultado[0]['status_final']}")
+    return df_out
