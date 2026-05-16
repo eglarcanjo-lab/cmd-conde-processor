@@ -98,7 +98,7 @@ def upload_ambos():
             df_clientes = None
     else:
         df_clientes = ler_aba("pdv_base")
-        resultados["clientes"] = "⚠️ Arquivo não enviado, usando base existente"
+        # Não mostra no resultado quando não enviado
 
     if "faturamento_mktp" in arquivos:
         try:
@@ -107,6 +107,14 @@ def upload_ambos():
         except Exception as e:
             traceback.print_exc()
             resultados["faturamento_mktp"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "spo_visitacao_gv" in arquivos:
+        try:
+            processar_visitacao_gv(arquivos["spo_visitacao_gv"].read())
+            resultados["spo_visitacao_gv"] = "✅ Visitação GV processada"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["spo_visitacao_gv"] = f"❌ Erro: {str(e)[:100]}"
 
     if "pontos_bees" in arquivos:
         try:
