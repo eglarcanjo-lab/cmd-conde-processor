@@ -1151,25 +1151,30 @@ def processar_visitacao_gv(conteudo_bytes):
     df["_gps"]    = df[col_gps].str.strip().str.upper()
     df["_valida"] = (df["_visita"] == "OK") & (df["_gps"] == "OK")
 
-    # Carrega nomes dos PDVs da pdv_base
+    # Carrega nomes e dia de visita dos PDVs da pdv_base
     try:
         df_base = ler_aba("pdv_base")
         mapa_nomes = {}
+        mapa_dia = {}
         if not df_base.empty:
             for _, row in df_base.iterrows():
                 cod = str(row.get("cod_pdv", row.get("cod", ""))).strip().lstrip("0")
                 nome = str(row.get("nome_fantasia", row.get("nome", ""))).strip()
+                dia = str(row.get("dia_visita", "")).strip()
                 if cod:
                     mapa_nomes[cod] = nome
+                    mapa_dia[cod] = dia
     except Exception:
         mapa_nomes = {}
+        mapa_dia = {}
 
     df["_nome_pdv"] = df["_pdv"].map(mapa_nomes).fillna("")
+    df["_dia_visita"] = df["_pdv"].map(mapa_dia).fillna("")
     df["mes_referencia"] = date.today().strftime("%Y-%m")
 
     # Grava detalhe linha por linha
-    df_out = df[["_gv", "_setor", "_pdv", "_nome_pdv", "_visita", "_gps", "_valida", "mes_referencia"]].copy()
-    df_out.columns = ["gv", "setor", "cod_pdv", "nome_pdv", "visita_ok", "gps_ok", "valida", "mes_referencia"]
+    df_out = df[["_gv", "_setor", "_pdv", "_nome_pdv", "_dia_visita", "_visita", "_gps", "_valida", "mes_referencia"]].copy()
+    df_out.columns = ["gv", "setor", "cod_pdv", "nome_pdv", "dia_visita", "visita_ok", "gps_ok", "valida", "mes_referencia"]
     df_out["valida"] = df_out["valida"].map({True: "SIM", False: "NÃO"})
 
     sobrescrever_aba("spo_visitacao_gv", df_out)
