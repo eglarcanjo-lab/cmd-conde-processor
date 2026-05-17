@@ -1542,7 +1542,14 @@ def calcular_politica_comercial():
         return pd.DataFrame()
 
     # Filtra só tasks de TTC
-    df_tasks["_id_task"] = df_tasks.get("id_task", df_tasks.get("id_task_pool", pd.Series())).str.strip()
+    # Busca coluna id_task com fallbacks
+    if "id_task" in df_tasks.columns:
+        df_tasks["_id_task"] = df_tasks["id_task"].str.strip()
+    elif "id_task_pool" in df_tasks.columns:
+        df_tasks["_id_task"] = df_tasks["id_task_pool"].str.strip()
+    else:
+        print("  ⚠️ Coluna id_task não encontrada. Colunas:", df_tasks.columns.tolist())
+        return pd.DataFrame()
     df_ttc = df_tasks[df_tasks["_id_task"].isin(TASKS_TTC)].copy()
 
     if df_ttc.empty:
