@@ -1529,105 +1529,64 @@ TASKS_TTC = {"03_05_09", "03_03_01", "03_04_01", "03_05_10"}
 META_POLITICA = 60  # 60%
 
 def calcular_politica_comercial():
-    """
-    Calcula aderência de política comercial a partir das tasks já importadas.
-    PDVs aderidos = PDVs com tasks de execução de TTC.
-    PDVs com execução = PDVs com pelo menos 1 task validada.
-    """
+    """Calcula aderência de política comercial a partir das tasks importadas."""
     print("📊 Calculando Política Comercial (SPO Item 8)...")
 
-    df_tasks = ler_aba("tasks")
-    print(f"  📋 Tasks carregadas: {len(df_tasks)} linhas, colunas: {df_tasks.columns.tolist()[:8]}")
-    if df_tasks.empty:
-        print("  ⚠️ Aba tasks vazia")
+    TASKS_TTC_LOCAL = {"03_05_09", "03_03_01", "03_04_01", "03_05_10"}
+    META_POLITICA_LOCAL = 60
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    try:
+        df_tasks = ler_aba("tasks")
+        print(f"  📋 Tasks: {len(df_tasks)} linhas")
+        if df_tasks.empty:
+            print("  ⚠️ Aba tasks vazia")
+            return pd.DataFrame()
+
+        # Filtra tasks TTC
+        ids = df_tasks["id_task"].str.strip()
+        mask = ids.isin(TASKS_TTC_LOCAL)
+        df_ttc = df_tasks[mask].copy()
+        print(f"  Tasks TTC encontradas: {len(df_ttc)}")
+
+        if df_ttc.empty:
+            print(f"  ⚠️ Nenhuma task TTC. IDs amostra: {ids.unique()[:5].tolist()}")
+            return pd.DataFrame()
+
+        df_ttc["_setor"] = df_ttc["setor"].astype(str).str.strip()
+        df_ttc["_pdv"]   = df_ttc["cod_pdv"].astype(str).str.strip()
+        df_ttc["_ok"]    = df_ttc["status"].astype(str).str.strip().str.upper() == "VALID"
+        mes_ref = date.today().strftime("%Y-%m")
+
+        resumo = []
+        df_s_all = df_ttc[df_ttc["_setor"].isin(SETORES_LOCAL)]
+
+        for setor in sorted(df_s_all["_setor"].unique()):
+            grp = df_s_all[df_s_all["_setor"] == setor]
+            aderidos = grp["_pdv"].nunique()
+            execucao = grp[grp["_ok"]]["_pdv"].nunique()
+            pct = round(execucao / aderidos * 100, 1) if aderidos > 0 else 0
+            resumo.append({"setor": setor, "pdvs_aderidos": aderidos, "pdvs_execucao": execucao,
+                           "pct": pct, "meta": META_POLITICA_LOCAL,
+                           "ok": "OK" if pct >= META_POLITICA_LOCAL else "NOK", "mes_referencia": mes_ref})
+            print(f"  Setor {setor}: {execucao}/{aderidos} ({pct}%)")
+
+        # Total operação
+        total_ad  = df_s_all["_pdv"].nunique()
+        total_val = df_s_all[df_s_all["_ok"]]["_pdv"].nunique()
+        pct_op    = round(total_val / total_ad * 100, 1) if total_ad > 0 else 0
+        resumo.append({"setor": "OPERACAO", "pdvs_aderidos": total_ad, "pdvs_execucao": total_val,
+                       "pct": pct_op, "meta": META_POLITICA_LOCAL,
+                       "ok": "OK" if pct_op >= META_POLITICA_LOCAL else "NOK", "mes_referencia": mes_ref})
+
+        df_resumo = pd.DataFrame(resumo)
+        sobrescrever_aba("spo_politica_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Política Comercial", "✅ OK", f"Operação: {pct_op}% ({total_val}/{total_ad} PDVs)")
+        print(f"  ✅ Política Comercial: {pct_op}% operação")
+        return df_resumo
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"  ❌ Erro: {e}")
         return pd.DataFrame()
-
-    # Filtra só tasks de TTC
-    # Busca coluna id_task com fallbacks
-    if "id_task" in df_tasks.columns:
-        df_tasks["_id_task"] = df_tasks["id_task"].str.strip()
-    elif "id_task_pool" in df_tasks.columns:
-        df_tasks["_id_task"] = df_tasks["id_task_pool"].str.strip()
-    else:
-        print("  ⚠️ Coluna id_task não encontrada. Colunas:", df_tasks.columns.tolist())
-        return pd.DataFrame()
-    print(f"  IDs únicos (amostra): {df_tasks['_id_task'].dropna().unique()[:10].tolist()}")
-    df_ttc = df_tasks[df_tasks["_id_task"].isin(TASKS_TTC)].copy()
-
-    if df_ttc.empty:
-        print(f"  ⚠️ Nenhuma task de TTC encontrada. TASKS_TTC={TASKS_TTC}")
-        return pd.DataFrame()
-
-    df_ttc["_setor"] = df_ttc["setor"].str.strip()
-    df_ttc["_pdv"] = df_ttc["cod_pdv"].str.strip()
-    # Busca coluna de status com fallbacks
-    if "status" in df_ttc.columns:
-        df_ttc["_valida"] = df_ttc["status"].str.strip().str.upper() == "VALID"
-    elif "effectiveness_result" in df_ttc.columns:
-        df_ttc["_valida"] = df_ttc["effectiveness_result"].str.strip().str.upper() == "VALID"
-    else:
-        df_ttc["_valida"] = False
-        print("  ⚠️ Coluna status não encontrada, assumindo NOK")
-
-    # Mes referencia
-    df_ttc["_mes"] = date.today().strftime("%Y-%m")
-    
-    print(f"  Tasks TTC: {len(df_ttc)} | Válidas: {df_ttc['_valida'].sum()}")
-
-    mes_ref = df_ttc["_mes"].dropna().max() or date.today().strftime("%Y-%m")
-
-    # Resumo por setor
-    resumo = []
-    for setor in sorted(df_ttc["_setor"].dropna().unique()):
-        df_s = df_ttc[df_ttc["_setor"] == setor]
-        pdvs_aderidos = df_s["_pdv"].nunique()
-        pdvs_execucao = df_s[df_s["_valida"]]["_pdv"].nunique()
-        pct = round((pdvs_execucao / pdvs_aderidos * 100) if pdvs_aderidos > 0 else 0, 1)
-        resumo.append({
-            "setor": setor,
-            "pdvs_aderidos": pdvs_aderidos,
-            "pdvs_execucao": pdvs_execucao,
-            "pct": pct,
-            "meta": META_POLITICA,
-            "ok": "OK" if pct >= META_POLITICA else "NOK",
-            "mes_referencia": mes_ref,
-        })
-        print(f"  Setor {setor}: {pdvs_execucao}/{pdvs_aderidos} PDVs ({pct}%)")
-
-    # Total operação
-    total_ader = df_ttc["_pdv"].nunique()
-    total_exec = df_ttc[df_ttc["_valida"]]["_pdv"].nunique()
-    pct_op = round((total_exec / total_ader * 100) if total_ader > 0 else 0, 1)
-    resumo.append({
-        "setor": "OPERACAO",
-        "pdvs_aderidos": total_ader,
-        "pdvs_execucao": total_exec,
-        "pct": pct_op,
-        "meta": META_POLITICA,
-        "ok": "OK" if pct_op >= META_POLITICA else "NOK",
-        "mes_referencia": mes_ref,
-    })
-
-    df_resumo = pd.DataFrame(resumo)
-    sobrescrever_aba("spo_politica_resumo", df_resumo)
-
-    # Detalhe por PDV
-    det = []
-    for (setor, pdv), grp in df_ttc.groupby(["_setor", "_pdv"]):
-        tasks_total = len(grp)
-        tasks_validas = grp["_valida"].sum()
-        pct_pdv = round((tasks_validas / tasks_total * 100) if tasks_total > 0 else 0, 1)
-        det.append({
-            "setor": setor, "cod_pdv": pdv,
-            "tasks_aderidas": tasks_total,
-            "tasks_validas": int(tasks_validas),
-            "pct": pct_pdv,
-            "ok": "OK" if pct_pdv >= META_POLITICA else "NOK",
-            "mes_referencia": mes_ref,
-        })
-
-    df_det = pd.DataFrame(det)
-    sobrescrever_aba("spo_politica_detalhe", df_det)
-    atualizar_status_arquivo("SPO - Política Comercial", "✅ OK", f"Operação: {pct_op}% ({total_exec}/{total_ader} PDVs)")
-    print(f"  ✅ Política Comercial: {pct_op}% operação")
-    return df_resumo
