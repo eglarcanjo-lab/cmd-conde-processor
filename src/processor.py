@@ -1568,11 +1568,8 @@ def calcular_politica_comercial():
         df_ttc["_valida"] = False
         print("  ⚠️ Coluna status não encontrada, assumindo NOK")
 
-    # Busca coluna mes_ano
-    if "mes_ano" in df_ttc.columns:
-        df_ttc["_mes"] = df_ttc["mes_ano"].str.strip()
-    else:
-        df_ttc["_mes"] = date.today().strftime("%Y-%m")
+    # Mes referencia
+    df_ttc["_mes"] = date.today().strftime("%Y-%m")
     
     print(f"  Tasks TTC: {len(df_ttc)} | Válidas: {df_ttc['_valida'].sum()}")
 
