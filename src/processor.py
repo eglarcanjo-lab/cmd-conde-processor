@@ -1590,3 +1590,69 @@ def calcular_politica_comercial():
         traceback.print_exc()
         print(f"  ❌ Erro: {e}")
         return pd.DataFrame()
+
+# ─── SPO — EXECUÇÃO MENU DE CERVEJA (Item 9) ────────────────────────────────
+
+def calcular_execucao_menu():
+    """
+    Calcula % tasks de execução de TTC validadas por setor.
+    Usa mesmas tasks do Item 8: 03_03_01, 03_05_09, 03_05_10.
+    Denominador = total de tasks abertas (não PDVs).
+    """
+    print("📊 Calculando Execução Menu Cerveja (SPO Item 9)...")
+
+    TASKS_MENU = {"03_03_01", "03_05_09", "03_05_10"}
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    try:
+        df_tasks = ler_aba("tasks")
+        if df_tasks.empty:
+            print("  ⚠️ Aba tasks vazia")
+            return pd.DataFrame()
+
+        ids = df_tasks["id_task"].astype(str).str.strip()
+        df_menu = df_tasks[ids.isin(TASKS_MENU)].copy()
+        print(f"  Tasks menu encontradas: {len(df_menu)}")
+
+        if df_menu.empty:
+            return pd.DataFrame()
+
+        df_menu["_setor"] = df_menu["setor"].astype(str).str.strip()
+        df_menu["_ok"] = df_menu["status"].astype(str).str.strip().str.upper() == "VALID"
+        df_menu["_mes"] = df_menu.get("mes_ano", pd.Series(dtype=str)).astype(str).str.strip()
+        mes_ref = date.today().strftime("%Y-%m")
+
+        resumo = []
+        df_s = df_menu[df_menu["_setor"].isin(SETORES_LOCAL)]
+
+        for setor in sorted(df_s["_setor"].unique()):
+            grp = df_s[df_s["_setor"] == setor]
+            total = len(grp)
+            validas = grp["_ok"].sum()
+            pct = round(validas / total * 100, 1) if total > 0 else 0
+            resumo.append({
+                "setor": setor, "tasks_total": total, "tasks_validas": int(validas),
+                "pct": pct, "ok": "OK" if pct >= 46 else "NOK", "mes_referencia": mes_ref
+            })
+            print(f"  Setor {setor}: {int(validas)}/{total} ({pct}%)")
+
+        # Total operação
+        total_op = len(df_s)
+        val_op = int(df_s["_ok"].sum())
+        pct_op = round(val_op / total_op * 100, 1) if total_op > 0 else 0
+        resumo.append({
+            "setor": "OPERACAO", "tasks_total": total_op, "tasks_validas": val_op,
+            "pct": pct_op, "ok": "OK" if pct_op >= 46 else "NOK", "mes_referencia": mes_ref
+        })
+
+        df_resumo = pd.DataFrame(resumo)
+        sobrescrever_aba("spo_menu_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Execução Menu", "✅ OK", f"Operação: {pct_op}% ({val_op}/{total_op} tasks)")
+        print(f"  ✅ Execução Menu: {pct_op}% operação")
+        return df_resumo
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"  ❌ Erro: {e}")
+        return pd.DataFrame()
