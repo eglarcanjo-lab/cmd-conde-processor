@@ -1537,6 +1537,7 @@ def calcular_politica_comercial():
     print("📊 Calculando Política Comercial (SPO Item 8)...")
 
     df_tasks = ler_aba("tasks")
+    print(f"  📋 Tasks carregadas: {len(df_tasks)} linhas, colunas: {df_tasks.columns.tolist()[:8]}")
     if df_tasks.empty:
         print("  ⚠️ Aba tasks vazia")
         return pd.DataFrame()
@@ -1558,9 +1559,22 @@ def calcular_politica_comercial():
 
     df_ttc["_setor"] = df_ttc["setor"].str.strip()
     df_ttc["_pdv"] = df_ttc["cod_pdv"].str.strip()
-    df_ttc["_valida"] = df_ttc.get("status", df_ttc.get("effectiveness_result", 
-                        df_ttc.get("Effectiveness Result", pd.Series()))).str.strip().str.upper() == "VALID"
-    df_ttc["_mes"] = df_ttc.get("mes_ano", pd.Series()).str.strip()
+    # Busca coluna de status com fallbacks
+    if "status" in df_ttc.columns:
+        df_ttc["_valida"] = df_ttc["status"].str.strip().str.upper() == "VALID"
+    elif "effectiveness_result" in df_ttc.columns:
+        df_ttc["_valida"] = df_ttc["effectiveness_result"].str.strip().str.upper() == "VALID"
+    else:
+        df_ttc["_valida"] = False
+        print("  ⚠️ Coluna status não encontrada, assumindo NOK")
+
+    # Busca coluna mes_ano
+    if "mes_ano" in df_ttc.columns:
+        df_ttc["_mes"] = df_ttc["mes_ano"].str.strip()
+    else:
+        df_ttc["_mes"] = date.today().strftime("%Y-%m")
+    
+    print(f"  Tasks TTC: {len(df_ttc)} | Válidas: {df_ttc['_valida'].sum()}")
 
     mes_ref = df_ttc["_mes"].dropna().max() or date.today().strftime("%Y-%m")
 
