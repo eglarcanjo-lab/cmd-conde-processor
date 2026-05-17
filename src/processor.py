@@ -1551,10 +1551,11 @@ def calcular_politica_comercial():
     else:
         print("  ⚠️ Coluna id_task não encontrada. Colunas:", df_tasks.columns.tolist())
         return pd.DataFrame()
+    print(f"  IDs únicos (amostra): {df_tasks['_id_task'].dropna().unique()[:10].tolist()}")
     df_ttc = df_tasks[df_tasks["_id_task"].isin(TASKS_TTC)].copy()
 
     if df_ttc.empty:
-        print("  ⚠️ Nenhuma task de TTC encontrada")
+        print(f"  ⚠️ Nenhuma task de TTC encontrada. TASKS_TTC={TASKS_TTC}")
         return pd.DataFrame()
 
     df_ttc["_setor"] = df_ttc["setor"].str.strip()
