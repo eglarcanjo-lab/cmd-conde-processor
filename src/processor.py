@@ -2527,5 +2527,3 @@ def processar_pedido_alone(conteudo_bytes):
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"  ❌ Erro: {e}"); return pd.DataFrame()
-#   u p d a t e d  
- 
