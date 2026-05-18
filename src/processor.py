@@ -2359,9 +2359,21 @@ def processar_pedido_alone(conteudo_bytes):
         df["cod_pdv_norm"] = df["cod_pdv"].apply(norm_alone)
 
         # Carregar pdv_base para cruzamento
+        print("  Carregando pdv_base...")
         df_base = ler_aba("pdv_base")
+        print(f"  pdv_base: {len(df_base)} linhas, vazia={df_base.empty}")
         if not df_base.empty:
-            df_base["_cod"] = df_base["cod_pdv"].astype(str).str.strip()
+            # Normalizar cod_pdv da base: remover .0 de floats
+            def norm_cod(v):
+                s = str(v).strip()
+                if s.endswith(".0"): s = s[:-2]
+                return s
+            df_base["_cod"] = df_base["cod_pdv"].apply(norm_cod)
+            # DEBUG
+            print(f"  DEBUG pdv_base cod amostra: {df_base['_cod'].head(5).tolist()}")
+            print(f"  DEBUG alone cod amostra: {df['cod_pdv_norm'].head(5).tolist()}")
+            matched = df["cod_pdv_norm"].isin(df_base["_cod"])
+            print(f"  DEBUG cruzamento: {matched.sum()}/{len(df)} PDVs encontrados")
             mapa_setor  = df_base.set_index("_cod")["setor"].to_dict()
             # nome_fantasia é o campo correto na pdv_base
             if "nome_fantasia" in df_base.columns:
