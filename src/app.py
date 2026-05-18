@@ -440,6 +440,22 @@ def calcular_spo_tasks_cerv_zero():
         return jsonify({"error": str(e)}), 500
 
 
+
+@app.route("/api/calcular/spo-tasks-digitalizacao", methods=["POST"])
+def calcular_spo_tasks_digitalizacao():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    try:
+        from processor import _calcular_tasks_com_df
+        from sheets_service import ler_aba
+        df_tasks = ler_aba("tasks")
+        _calcular_tasks_com_df(df_tasks, "digitalização bees", None, None,
+                               "spo_tasks_digit_resumo", "SPO - Tasks Digitalização", 60)
+        return jsonify({"success": True, "message": "Tasks Digitalização calculadas."})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
