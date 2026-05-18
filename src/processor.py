@@ -2350,9 +2350,13 @@ def processar_pedido_alone(conteudo_bytes):
 
         # Extrair código do PDV (parte após o _) e normalizar (remover zeros à esquerda)
         df["cod_pdv"] = df["unb_pdv"].astype(str).str.split("_").str[1]
-        df["cod_pdv_norm"] = df["cod_pdv"].apply(
-            lambda x: str(int(x)) if str(x).isdigit() else x
-        )
+        # Normalizar removendo .0 de floats se houver
+        def norm_alone(v):
+            s = str(v).strip()
+            if s.endswith(".0"):
+                s = s[:-2]
+            return s
+        df["cod_pdv_norm"] = df["cod_pdv"].apply(norm_alone)
 
         # Carregar pdv_base para cruzamento
         df_base = ler_aba("pdv_base")
