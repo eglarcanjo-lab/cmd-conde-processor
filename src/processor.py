@@ -1740,3 +1740,85 @@ def calcular_tarefas_cerveja():
         traceback.print_exc()
         print(f"  ❌ Erro: {e}")
         return pd.DataFrame()
+
+
+# ─── SPO — TASKS FATURAMENTO SCORE 5 (Item 12) ──────────────────────────────
+
+META_SCORE5 = 46  # % — ajustar quando metas oficiais chegarem
+
+def processar_score5(conteudo_bytes):
+    """
+    Processa o relatório ON_TRADE (Score 5 / Faturamento).
+    Todos os PDVs do relatório são Score 5.
+    BATEU META == 1 → task validada.
+    Gera aba: spo_score5_resumo
+    Colunas resultado: setor | pdvs_total | pdvs_ok | pct | meta | ok | mes_referencia
+    """
+    import io as _io
+    print("📂 Processando Score 5 / Tasks Faturamento (SPO Item 12)...")
+
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    try:
+        try:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
+        except Exception:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
+
+        df.columns = [c.strip() for c in df.columns]
+
+        # Normaliza setor (coluna RN)
+        df["_setor"] = df["RN"].apply(normalizar_setor)
+        df = df[df["_setor"].isin(SETORES_LOCAL)]
+
+        # Remove linhas sem CHAVE PDV
+        df = df[df["CHAVE PDV"].notna() & (df["CHAVE PDV"].str.strip() != "")]
+
+        # BATEU META: 1 = OK
+        df["_ok"] = df["BATEU META"].astype(str).str.strip() == "1"
+
+        mes_ref = date.today().strftime("%Y-%m")
+        resumo = []
+
+        for setor in sorted(df["_setor"].unique()):
+            grp = df[df["_setor"] == setor]
+            total = len(grp)
+            ok    = int(grp["_ok"].sum())
+            pct   = round(ok / total * 100, 1) if total > 0 else 0
+            resumo.append({
+                "setor":          setor,
+                "pdvs_total":     total,
+                "pdvs_ok":        ok,
+                "pct":            pct,
+                "meta":           META_SCORE5,
+                "ok":             "OK" if pct >= META_SCORE5 else "NOK",
+                "mes_referencia": mes_ref,
+            })
+            print(f"  Setor {setor}: {ok}/{total} ({pct}%)")
+
+        # Total operação
+        total_op = len(df)
+        ok_op    = int(df["_ok"].sum())
+        pct_op   = round(ok_op / total_op * 100, 1) if total_op > 0 else 0
+        resumo.append({
+            "setor":          "OPERACAO",
+            "pdvs_total":     total_op,
+            "pdvs_ok":        ok_op,
+            "pct":            pct_op,
+            "meta":           META_SCORE5,
+            "ok":             "OK" if pct_op >= META_SCORE5 else "NOK",
+            "mes_referencia": mes_ref,
+        })
+
+        df_resumo = pd.DataFrame(resumo)
+        sobrescrever_aba("spo_score5_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Score 5 (ON_TRADE)", "✅ OK",
+                                 f"Operação: {pct_op}% ({ok_op}/{total_op} PDVs)")
+        print(f"  ✅ Score 5: {pct_op}% operação ({ok_op}/{total_op} PDVs)")
+        return df_resumo
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"  ❌ Erro: {e}")
+        return pd.DataFrame()
