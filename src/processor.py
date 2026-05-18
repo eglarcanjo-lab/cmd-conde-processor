@@ -2416,3 +2416,126 @@ def processar_pedido_alone(conteudo_bytes):
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"  ❌ Erro: {e}"); return pd.DataFrame()
+
+
+# ─── SPO — +RGB (Item 20) ─────────────────────────────────────────────────────
+
+def processar_rgb(conteudo_bytes):
+    """
+    Processa o relatório +RGB (BI exportado).
+    Colunas usadas: RN, Base, Unb Pdv, Bateu Meta, Desafio RGB, Task RGB, Nome PDV
+    3 abas geradas: spo_rgb_total, spo_rgb_litrinho, spo_rgb_inteira
+    1 detalhe: spo_rgb_detalhe (por PDV)
+    Cruza cod_pdv com pdv_base para pegar dia_visita.
+    """
+    import io as _io
+    print("📂 Processando +RGB (SPO Item 20)...")
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    try:
+        try:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
+        except Exception:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
+
+        df.columns = [c.strip() for c in df.columns]
+
+        # Filtrar só setores locais (coluna RN)
+        df["setor"] = df["RN"].astype(str).str.strip()
+        df = df[df["setor"].isin(SETORES_LOCAL)].copy()
+        print(f"  PDVs nos setores locais: {len(df)}")
+
+        if df.empty:
+            return pd.DataFrame()
+
+        # Extrair cod_pdv (após o _)
+        df["cod_pdv"] = df["Unb Pdv"].astype(str).str.split("_").str[-1].str.strip()
+
+        # Cruzar com pdv_base para dia_visita
+        df_base = ler_aba("pdv_base")
+        if not df_base.empty:
+            def norm(v):
+                s = str(v).strip()
+                if s.endswith(".0"): s = s[:-2]
+                return s
+            df_base["_cod"] = df_base["cod_pdv"].apply(norm)
+            mapa_visita = df_base.set_index("_cod")["dia_visita"].to_dict() if "dia_visita" in df_base.columns else {}
+        else:
+            mapa_visita = {}
+
+        df["dia_visita"] = df["cod_pdv"].map(mapa_visita).fillna("").astype(str)
+
+        # Normalizar campos
+        df["base"]        = df["Base"].astype(str).str.strip().str.upper()
+        df["nome_pdv"]    = df["Nome PDV"].astype(str).str.strip()
+        df["bateu_meta"]  = df["Bateu Meta"].astype(str).str.strip() == "1"
+        df["desafio_rgb"] = df["Desafio RGB"].astype(str).str.strip() == "1"
+        df["task_rgb"]    = df["Task RGB"].astype(str).str.strip() == "1"
+
+        mes_ref = date.today().strftime("%Y-%m")
+
+        # ── Detalhe ──────────────────────────────────────────────────────────
+        df_det = df[["cod_pdv","nome_pdv","setor","base","dia_visita",
+                     "bateu_meta","desafio_rgb","task_rgb"]].copy()
+        df_det["bateu_meta"]  = df_det["bateu_meta"].map({True:"SIM", False:"NÃO"})
+        df_det["desafio_rgb"] = df_det["desafio_rgb"].map({True:"SIM", False:"NÃO"})
+        df_det["task_rgb"]    = df_det["task_rgb"].map({True:"SIM", False:"NÃO"})
+        df_det["mes_referencia"] = mes_ref
+        sobrescrever_aba("spo_rgb_detalhe", df_det)
+
+        # ── Função auxiliar: resumo por setor ─────────────────────────────────
+        def resumo_por_setor(df_filtrado, nome_aba, nome_status):
+            resumo = []
+            for setor in sorted(df_filtrado["setor"].unique()):
+                grp = df_filtrado[df_filtrado["setor"] == setor]
+                total    = len(grp)
+                bateu    = int(grp["bateu_meta"].sum())
+                desafio  = int(grp["desafio_rgb"].sum())
+                task     = int(grp["task_rgb"].sum())
+                resumo.append({
+                    "setor":          setor,
+                    "pdvs_total":     total,
+                    "pdvs_bateu_meta":bateu,
+                    "pdvs_desafio":   desafio,
+                    "pdvs_task":      task,
+                    "pct_meta":       round(bateu / total * 100, 1) if total > 0 else 0,
+                    "mes_referencia": mes_ref,
+                })
+                print(f"  [{nome_status}] Setor {setor}: {bateu}/{total} bateram meta")
+
+            total_op   = len(df_filtrado)
+            bateu_op   = int(df_filtrado["bateu_meta"].sum())
+            desafio_op = int(df_filtrado["desafio_rgb"].sum())
+            task_op    = int(df_filtrado["task_rgb"].sum())
+            resumo.append({
+                "setor":           "OPERACAO",
+                "pdvs_total":      total_op,
+                "pdvs_bateu_meta": bateu_op,
+                "pdvs_desafio":    desafio_op,
+                "pdvs_task":       task_op,
+                "pct_meta":        round(bateu_op / total_op * 100, 1) if total_op > 0 else 0,
+                "mes_referencia":  mes_ref,
+            })
+            df_res = pd.DataFrame(resumo)
+            sobrescrever_aba(nome_aba, df_res)
+            atualizar_status_arquivo(f"SPO - +RGB {nome_status}", "✅ OK",
+                                     f"Operação: {bateu_op}/{total_op} PDVs bateram meta")
+            print(f"  ✅ +RGB {nome_status}: {bateu_op}/{total_op} ({round(bateu_op/total_op*100,1) if total_op>0 else 0}%)")
+            return df_res
+
+        # Total
+        resumo_por_setor(df, "spo_rgb_total", "Total")
+        # Litrinho
+        df_lit = df[df["base"] == "LITRINHO"].copy()
+        if not df_lit.empty:
+            resumo_por_setor(df_lit, "spo_rgb_litrinho", "Litrinho")
+        # Inteira Verde
+        df_int = df[df["base"] == "INTEIRA"].copy()
+        if not df_int.empty:
+            resumo_por_setor(df_int, "spo_rgb_inteira", "Inteira")
+
+        return df
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"  ❌ Erro: {e}"); return pd.DataFrame()

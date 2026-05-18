@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -176,6 +176,14 @@ def upload_ambos():
         except Exception as e:
             traceback.print_exc()
             resultados["spo_score5"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "spo_rgb" in arquivos:
+        try:
+            processar_rgb(arquivos["spo_rgb"].read())
+            resultados["spo_rgb"] = "✅ +RGB processado"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["spo_rgb"] = f"❌ Erro: {str(e)[:100]}"
 
     if "spo_alone" in arquivos:
         try:
@@ -475,6 +483,20 @@ def upload_spo_alone():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("SPO - Pedido Alone", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.route("/api/processar/spo-rgb", methods=["POST"])
+def upload_spo_rgb():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
+    try:
+        df = processar_rgb(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"+RGB: {len(df)} PDVs processados."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("SPO - +RGB Total", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 
