@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -167,6 +167,7 @@ def upload_ambos():
                 calcular_tarefas_cerveja()
                 calcular_tarefas_nab()
                 calcular_tarefas_volume()
+                calcular_tarefas_marketplace()
             except:
                 pass
         except Exception as e:
@@ -403,6 +404,18 @@ def calcular_spo_tasks_volume():
     try:
         df = calcular_tarefas_volume()
         return jsonify({"success": True, "message": f"Tasks Volume calculadas: {len(df)} setores."})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.route("/api/calcular/spo-tasks-marketplace", methods=["POST"])
+def calcular_spo_tasks_marketplace():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    try:
+        df = calcular_tarefas_marketplace()
+        return jsonify({"success": True, "message": f"Tasks Marketplace calculadas: {len(df)} setores."})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

@@ -1976,3 +1976,75 @@ def calcular_tarefas_volume():
         traceback.print_exc()
         print(f"  ❌ Erro: {e}")
         return pd.DataFrame()
+
+
+# ─── SPO — TAREFAS DE MARKETPLACE (Item 15) ──────────────────────────────────
+
+META_TASKS_MKTP = 60  # Placeholder
+
+def calcular_tarefas_marketplace():
+    """
+    Calcula tasks validadas do cluster Marketplace (sem filtro de cesta).
+    Cluster Primário = "Marketplace"
+    Tri: acumulado.
+    Gera aba: spo_tasks_marketplace_resumo
+    """
+    print("📊 Calculando Tarefas de Marketplace (SPO Item 15)...")
+
+    CLUSTER = "marketplace"
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    try:
+        df_tasks = ler_aba("tasks")
+        if df_tasks.empty:
+            print("  ⚠️ Aba tasks vazia")
+            return pd.DataFrame()
+
+        mask_cluster = df_tasks["cluster_primario"].astype(str).str.strip().str.lower() == CLUSTER
+        df = df_tasks[mask_cluster].copy()
+        print(f"  Tasks Marketplace encontradas: {len(df)}")
+
+        if df.empty:
+            print(f"  ⚠️ Cluster únicos: {df_tasks['cluster_primario'].astype(str).str.strip().unique()[:8].tolist()}")
+            return pd.DataFrame()
+
+        df["_setor"]  = df["setor"].astype(str).str.strip()
+        df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
+        mes_ref = date.today().strftime("%Y-%m")
+
+        resumo = []
+        df_s = df[df["_setor"].isin(SETORES_LOCAL)]
+
+        for setor in sorted(df_s["_setor"].unique()):
+            grp = df_s[df_s["_setor"] == setor]
+            total   = len(grp)
+            validas = int(grp["_valida"].sum())
+            pct     = round(validas / total * 100, 1) if total > 0 else 0
+            resumo.append({
+                "setor": setor, "tasks_total": total, "tasks_validas": validas,
+                "pct": pct, "ok": "OK" if pct >= META_TASKS_MKTP else "NOK",
+                "mes_referencia": mes_ref,
+            })
+            print(f"  Setor {setor}: {validas}/{total} ({pct}%)")
+
+        total_op   = len(df_s)
+        validas_op = int(df_s["_valida"].sum())
+        pct_op     = round(validas_op / total_op * 100, 1) if total_op > 0 else 0
+        resumo.append({
+            "setor": "OPERACAO", "tasks_total": total_op, "tasks_validas": validas_op,
+            "pct": pct_op, "ok": "OK" if pct_op >= META_TASKS_MKTP else "NOK",
+            "mes_referencia": mes_ref,
+        })
+
+        df_resumo = pd.DataFrame(resumo)
+        sobrescrever_aba("spo_tasks_marketplace_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Tasks Marketplace", "✅ OK",
+                                 f"Operação: {pct_op}% ({validas_op}/{total_op} tasks)")
+        print(f"  ✅ Tasks Marketplace: {pct_op}% operação ({validas_op}/{total_op})")
+        return df_resumo
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"  ❌ Erro: {e}")
+        return pd.DataFrame()
