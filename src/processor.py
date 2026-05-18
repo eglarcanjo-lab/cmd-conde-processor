@@ -2387,6 +2387,12 @@ def processar_pedido_alone(conteudo_bytes):
             mapa_setor = mapa_nome = mapa_visita = {}
 
         df["setor"]      = df["cod_pdv_norm"].map(mapa_setor).fillna("").astype(str)
+        df["setor"] = df["setor"].str.strip().apply(lambda x: str(int(float(x))) if x.replace('.','').isdigit() else x)
+        print(f"  DEBUG setores únicos mapeados: {sorted(df['setor'].unique().tolist())}")
+        print(f"  DEBUG SETORES_LOCAL: {sorted(SETORES_LOCAL)}")
+        df_s_test = df[df["setor"].isin(SETORES_LOCAL)]
+        print(f"  DEBUG PDVs no SETORES_LOCAL: {len(df_s_test)}")
+        print(f"  DEBUG PDVs alone nesses setores: {df_s_test['_alone'].sum() if len(df_s_test)>0 else 'N/A'}")
         df["nome_pdv"]   = df["cod_pdv_norm"].map(mapa_nome).fillna("").astype(str)
         df["dia_visita"] = df["cod_pdv_norm"].map(mapa_visita).fillna("").astype(str)
 
