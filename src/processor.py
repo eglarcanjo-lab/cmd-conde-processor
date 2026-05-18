@@ -2167,3 +2167,147 @@ def calcular_tarefas_cerveja_zero():
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"  ❌ Erro: {e}"); return pd.DataFrame()
+
+
+# ─── SPO — ORQUESTRADOR DE TASKS (evita quota exceeded) ─────────────────────
+
+def calcular_todos_spo_tasks():
+    """
+    Lê a aba tasks UMA vez e repassa para todas as funções SPO baseadas em tasks.
+    Evita exceder a quota de leitura do Google Sheets (60 req/min).
+    """
+    print("📊 Iniciando cálculo SPO tasks (leitura única)...")
+    import time
+
+    try:
+        df_tasks = ler_aba("tasks")
+        if df_tasks.empty:
+            print("  ⚠️ Aba tasks vazia — abortando cálculos SPO")
+            return
+        print(f"  📋 Tasks carregadas: {len(df_tasks)} linhas")
+    except Exception as e:
+        print(f"  ❌ Erro ao carregar tasks: {e}")
+        return
+
+    funcoes = [
+        ("Política Comercial",  lambda: _calcular_politica_com_df(df_tasks)),
+        ("Execução Menu",       lambda: _calcular_menu_com_df(df_tasks)),
+        ("Tasks Cerveja",       lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        None,           "spo_tasks_cerveja_resumo",    "SPO - Tasks Cerveja",    60)),
+        ("Tasks NAB",           lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "nab",         None,           "spo_tasks_nab_resumo",        "SPO - Tasks NAB",        60)),
+        ("Tasks Volume",        lambda: _calcular_tasks_com_df(df_tasks, "volume",                       None,          None,           "spo_tasks_volume_resumo",     "SPO - Tasks Volume",     60)),
+        ("Tasks Marketplace",   lambda: _calcular_tasks_com_df(df_tasks, "marketplace",                  None,          None,           "spo_tasks_marketplace_resumo","SPO - Tasks Marketplace",60)),
+        ("Tasks MATCH",         lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "match",       None,           "spo_tasks_match_resumo",      "SPO - Tasks MATCH",      60)),
+        ("Tasks Cerveja Zero",  lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        r"\bzero\b|\bcero\b", "spo_tasks_cerv_zero_resumo", "SPO - Tasks Cerveja Zero", 60)),
+    ]
+
+    for nome, fn in funcoes:
+        try:
+            fn()
+            time.sleep(1)  # respeita quota entre escritas
+        except Exception as e:
+            print(f"  ❌ Erro em {nome}: {e}")
+
+    print("  ✅ Todos os cálculos SPO tasks concluídos")
+
+
+def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_nome, meta):
+    """Calcula tasks SPO com DataFrame já carregado — evita chamada extra ao Sheets."""
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    mask = df_tasks["cluster_primario"].astype(str).str.strip().str.lower() == cluster
+    if cesta:
+        mask &= df_tasks["categoria"].astype(str).str.strip().str.lower() == cesta
+    df = df_tasks[mask].copy()
+
+    if filtro_texto:
+        mask_txt = df["descricao"].astype(str).str.contains(filtro_texto, case=False, regex=True, na=False)
+        df = df[mask_txt].copy()
+
+    print(f"  [{status_nome}] {len(df)} tasks encontradas")
+    if df.empty:
+        return
+
+    df["_setor"]  = df["setor"].astype(str).str.strip()
+    df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
+    mes_ref = date.today().strftime("%Y-%m")
+
+    resumo = []
+    df_s = df[df["_setor"].isin(SETORES_LOCAL)]
+
+    for setor in sorted(df_s["_setor"].unique()):
+        grp = df_s[df_s["_setor"] == setor]
+        total = len(grp); validas = int(grp["_valida"].sum())
+        pct = round(validas / total * 100, 1) if total > 0 else 0
+        resumo.append({"setor": setor, "tasks_total": total, "tasks_validas": validas,
+                       "pct": pct, "ok": "OK" if pct >= meta else "NOK", "mes_referencia": mes_ref})
+        print(f"    Setor {setor}: {validas}/{total} ({pct}%)")
+
+    total_op = len(df_s); validas_op = int(df_s["_valida"].sum())
+    pct_op = round(validas_op / total_op * 100, 1) if total_op > 0 else 0
+    resumo.append({"setor": "OPERACAO", "tasks_total": total_op, "tasks_validas": validas_op,
+                   "pct": pct_op, "ok": "OK" if pct_op >= meta else "NOK", "mes_referencia": mes_ref})
+
+    sobrescrever_aba(aba, pd.DataFrame(resumo))
+    atualizar_status_arquivo(status_nome, "✅ OK", f"Operação: {pct_op}% ({validas_op}/{total_op} tasks)")
+    print(f"    ✅ {pct_op}% operação")
+
+
+def _calcular_politica_com_df(df_tasks):
+    """Wrapper de calcular_politica_comercial usando df já carregado."""
+    TASKS_TTC = {"03_05_09", "03_03_01", "03_04_01", "03_05_10"}
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    META = 60
+
+    ids = df_tasks["id_task"].astype(str).str.strip()
+    df_ttc = df_tasks[ids.isin(TASKS_TTC)].copy()
+    if df_ttc.empty: return
+
+    df_ttc["_setor"] = df_ttc["setor"].astype(str).str.strip()
+    df_ttc["_pdv"]   = df_ttc["cod_pdv"].astype(str).str.strip()
+    df_ttc["_ok"]    = df_ttc["status"].astype(str).str.strip().str.upper() == "VALID"
+    mes_ref = date.today().strftime("%Y-%m")
+
+    resumo = []
+    df_s = df_ttc[df_ttc["_setor"].isin(SETORES_LOCAL)]
+    for setor in sorted(df_s["_setor"].unique()):
+        grp = df_s[df_s["_setor"] == setor]
+        ad = grp["_pdv"].nunique(); val = grp[grp["_ok"]]["_pdv"].nunique()
+        pct = round(val / ad * 100, 1) if ad > 0 else 0
+        resumo.append({"setor": setor, "pdvs_aderidos": ad, "pdvs_execucao": val,
+                       "pct": pct, "meta": META, "ok": "OK" if pct >= META else "NOK", "mes_referencia": mes_ref})
+    total_ad = df_s["_pdv"].nunique(); total_val = df_s[df_s["_ok"]]["_pdv"].nunique()
+    pct_op = round(total_val / total_ad * 100, 1) if total_ad > 0 else 0
+    resumo.append({"setor": "OPERACAO", "pdvs_aderidos": total_ad, "pdvs_execucao": total_val,
+                   "pct": pct_op, "meta": META, "ok": "OK" if pct_op >= META else "NOK", "mes_referencia": mes_ref})
+    sobrescrever_aba("spo_politica_resumo", pd.DataFrame(resumo))
+    atualizar_status_arquivo("SPO - Política Comercial", "✅ OK", f"Operação: {pct_op}%")
+
+
+def _calcular_menu_com_df(df_tasks):
+    """Wrapper de calcular_execucao_menu usando df já carregado."""
+    TASKS_MENU = {"03_03_01", "03_05_09", "03_05_10"}
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    META = 46
+
+    ids = df_tasks["id_task"].astype(str).str.strip()
+    df_menu = df_tasks[ids.isin(TASKS_MENU)].copy()
+    if df_menu.empty: return
+
+    df_menu["_setor"] = df_menu["setor"].astype(str).str.strip()
+    df_menu["_ok"]    = df_menu["status"].astype(str).str.strip().str.upper() == "VALID"
+    mes_ref = date.today().strftime("%Y-%m")
+
+    resumo = []
+    df_s = df_menu[df_menu["_setor"].isin(SETORES_LOCAL)]
+    for setor in sorted(df_s["_setor"].unique()):
+        grp = df_s[df_s["_setor"] == setor]
+        total = len(grp); validas = int(grp["_ok"].sum())
+        pct = round(validas / total * 100, 1) if total > 0 else 0
+        resumo.append({"setor": setor, "tasks_total": total, "tasks_validas": validas,
+                       "pct": pct, "ok": "OK" if pct >= META else "NOK", "mes_referencia": mes_ref})
+    total_op = len(df_s); val_op = int(df_s["_ok"].sum())
+    pct_op = round(val_op / total_op * 100, 1) if total_op > 0 else 0
+    resumo.append({"setor": "OPERACAO", "tasks_total": total_op, "tasks_validas": val_op,
+                   "pct": pct_op, "ok": "OK" if pct_op >= META else "NOK", "mes_referencia": mes_ref})
+    sobrescrever_aba("spo_menu_resumo", pd.DataFrame(resumo))
+    atualizar_status_arquivo("SPO - Execução Menu", "✅ OK", f"Operação: {pct_op}%")
