@@ -1824,22 +1824,20 @@ def processar_score5(conteudo_bytes):
         return pd.DataFrame()
 
 
-# ─── SPO — TAREFAS DE PORTFÓLIO NAB (Item 13) ────────────────────────────────
+# ─── SPO — TAREFAS DE VOLUME (Item 14) ───────────────────────────────────────
 
-META_TASKS_NAB = 60  # Placeholder — ajustar quando metas oficiais chegarem
+META_TASKS_VOLUME = 60  # Placeholder
 
-def calcular_tarefas_nab():
+def calcular_tarefas_volume():
     """
-    Calcula tasks validadas do cluster Desenvolvimento de Portfólio / Cesta NAB.
-    Cluster Primário = "Desenvolvimento de Portfólio"
-    Categoria       = "nab" (coluna P do relatório de tasks)
+    Calcula tasks validadas do cluster Volume (sem filtro de cesta).
+    Cluster Primário = "Volume"
     Tipo de cálculo tri: acumulado.
-    Gera aba: spo_tasks_nab_resumo
+    Gera aba: spo_tasks_volume_resumo
     """
-    print("📊 Calculando Tarefas de Portfólio NAB (SPO Item 13)...")
+    print("📊 Calculando Tarefas de Volume (SPO Item 14)...")
 
-    CLUSTER = "desenvolvimento de portfólio"
-    CESTA   = "nab"
+    CLUSTER = "volume"
     SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
 
     try:
@@ -1849,13 +1847,11 @@ def calcular_tarefas_nab():
             return pd.DataFrame()
 
         mask_cluster = df_tasks["cluster_primario"].astype(str).str.strip().str.lower() == CLUSTER
-        mask_cesta   = df_tasks["categoria"].astype(str).str.strip().str.lower() == CESTA
-        df = df_tasks[mask_cluster & mask_cesta].copy()
-        print(f"  Tasks NAB encontradas: {len(df)}")
+        df = df_tasks[mask_cluster].copy()
+        print(f"  Tasks Volume encontradas: {len(df)}")
 
         if df.empty:
-            print(f"  ⚠️ Cluster únicos: {df_tasks['cluster_primario'].astype(str).str.strip().unique()[:5].tolist()}")
-            print(f"  ⚠️ Categoria únicos: {df_tasks['categoria'].astype(str).str.strip().unique()[:5].tolist()}")
+            print(f"  ⚠️ Cluster únicos: {df_tasks['cluster_primario'].astype(str).str.strip().unique()[:8].tolist()}")
             return pd.DataFrame()
 
         df["_setor"]  = df["setor"].astype(str).str.strip()
@@ -1875,7 +1871,7 @@ def calcular_tarefas_nab():
                 "tasks_total":    total,
                 "tasks_validas":  validas,
                 "pct":            pct,
-                "ok":             "OK" if pct >= META_TASKS_NAB else "NOK",
+                "ok":             "OK" if pct >= META_TASKS_VOLUME else "NOK",
                 "mes_referencia": mes_ref,
             })
             print(f"  Setor {setor}: {validas}/{total} ({pct}%)")
@@ -1888,15 +1884,15 @@ def calcular_tarefas_nab():
             "tasks_total":    total_op,
             "tasks_validas":  validas_op,
             "pct":            pct_op,
-            "ok":             "OK" if pct_op >= META_TASKS_NAB else "NOK",
+            "ok":             "OK" if pct_op >= META_TASKS_VOLUME else "NOK",
             "mes_referencia": mes_ref,
         })
 
         df_resumo = pd.DataFrame(resumo)
-        sobrescrever_aba("spo_tasks_nab_resumo", df_resumo)
-        atualizar_status_arquivo("SPO - Tasks NAB", "✅ OK",
+        sobrescrever_aba("spo_tasks_volume_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Tasks Volume", "✅ OK",
                                  f"Operação: {pct_op}% ({validas_op}/{total_op} tasks)")
-        print(f"  ✅ Tasks NAB: {pct_op}% operação ({validas_op}/{total_op})")
+        print(f"  ✅ Tasks Volume: {pct_op}% operação ({validas_op}/{total_op})")
         return df_resumo
 
     except Exception as e:
