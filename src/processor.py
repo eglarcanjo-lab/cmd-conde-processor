@@ -2326,9 +2326,9 @@ def processar_pedido_alone(conteudo_bytes):
     """
     Processa o relatório de Pedido Alone (export do BI Digitalização).
     Colunas: unb_pdv | Pedidos | Pedidos Independentes | %Pedidos Independentes
-    Cruza com pdv_base para trazer setor, nome_pdv, dia_visita.
-    PDV alone = Pedidos Independentes > 0 (conta como 1 independente do volume).
-    Gera aba: spo_pedido_alone_resumo e spo_pedido_alone_detalhe
+    Cruza com pdv_base para trazer setor, nome_fantasia, dia_visita.
+    PDV alone = Pedidos Independentes > 0.
+    Gera: spo_pedido_alone_resumo e spo_pedido_alone_detalhe
     """
     import io as _io
     print("📂 Processando PDV com Compra Independente (SPO Item 19)...")
@@ -2348,25 +2348,34 @@ def processar_pedido_alone(conteudo_bytes):
         df = df[mask_valid].copy()
         print(f"  Linhas válidas: {len(df)}")
 
-        # Extrair código do PDV (parte após o _)
+        # Extrair código do PDV (parte após o _) e normalizar (remover zeros à esquerda)
         df["cod_pdv"] = df["unb_pdv"].astype(str).str.split("_").str[1]
+        df["cod_pdv_norm"] = df["cod_pdv"].apply(
+            lambda x: str(int(x)) if str(x).isdigit() else x
+        )
 
         # Carregar pdv_base para cruzamento
         df_base = ler_aba("pdv_base")
         if not df_base.empty:
             df_base["_cod"] = df_base["cod_pdv"].astype(str).str.strip()
             mapa_setor  = df_base.set_index("_cod")["setor"].to_dict()
-            mapa_nome   = df_base.set_index("_cod")["nome_pdv"].to_dict() if "nome_pdv" in df_base.columns else {}
+            # nome_fantasia é o campo correto na pdv_base
+            if "nome_fantasia" in df_base.columns:
+                mapa_nome = df_base.set_index("_cod")["nome_fantasia"].to_dict()
+            elif "nome_pdv" in df_base.columns:
+                mapa_nome = df_base.set_index("_cod")["nome_pdv"].to_dict()
+            else:
+                mapa_nome = {}
             mapa_visita = df_base.set_index("_cod")["dia_visita"].to_dict() if "dia_visita" in df_base.columns else {}
         else:
             mapa_setor = mapa_nome = mapa_visita = {}
 
-        df["setor"]      = df["cod_pdv"].map(mapa_setor).fillna("").astype(str)
-        df["nome_pdv"]   = df["cod_pdv"].map(mapa_nome).fillna("").astype(str)
-        df["dia_visita"] = df["cod_pdv"].map(mapa_visita).fillna("").astype(str)
+        df["setor"]      = df["cod_pdv_norm"].map(mapa_setor).fillna("").astype(str)
+        df["nome_pdv"]   = df["cod_pdv_norm"].map(mapa_nome).fillna("").astype(str)
+        df["dia_visita"] = df["cod_pdv_norm"].map(mapa_visita).fillna("").astype(str)
 
         # PDV alone = Pedidos Independentes > 0
-        df["_alone"] = pd.to_numeric(df["Pedidos Independentes"], errors="coerce").fillna(0) > 0
+        df["_alone"]         = pd.to_numeric(df["Pedidos Independentes"], errors="coerce").fillna(0) > 0
         df["_pedidos_alone"] = pd.to_numeric(df["Pedidos Independentes"], errors="coerce").fillna(0).astype(int)
         df["_pedidos_total"] = pd.to_numeric(df["Pedidos"], errors="coerce").fillna(0).astype(int)
 
@@ -2375,7 +2384,7 @@ def processar_pedido_alone(conteudo_bytes):
 
         # ── Detalhe ──────────────────────────────────────────────────────────
         df_det = df[df["setor"].isin(SETORES_LOCAL)][
-            ["cod_pdv","nome_pdv","setor","dia_visita","_pedidos_total","_pedidos_alone","_alone"]
+            ["cod_pdv_norm","nome_pdv","setor","dia_visita","_pedidos_total","_pedidos_alone","_alone"]
         ].copy()
         df_det.columns = ["cod_pdv","nome_pdv","setor","dia_visita","pedidos_total","pedidos_alone","is_alone"]
         df_det["is_alone"] = df_det["is_alone"].map({True: "SIM", False: "NÃO"})
