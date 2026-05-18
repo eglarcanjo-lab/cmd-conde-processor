@@ -2314,6 +2314,7 @@ def _calcular_menu_com_df(df_tasks):
     atualizar_status_arquivo("SPO - Execução Menu", "✅ OK", f"Operação: {pct_op}%")
 
 
+
 # ─── SPO — PDV COM COMPRA INDEPENDENTE / PEDIDO ALONE (Item 19) ──────────────
 
 META_ALONE = {
@@ -2404,118 +2405,6 @@ def processar_pedido_alone(conteudo_bytes):
         total_op = len(df_s)
         resumo.append({"setor": "OPERACAO", "pdvs_alone": alone_op, "pdvs_total": total_op,
                        "meta": meta_op, "ok": "OK" if alone_op >= meta_op else "NOK", "mes_referencia": mes_ref})
-
-        df_resumo = pd.DataFrame(resumo)
-        sobrescrever_aba("spo_pedido_alone_resumo", df_resumo)
-        atualizar_status_arquivo("SPO - Pedido Alone", "✅ OK",
-                                 f"Operação: {alone_op} PDVs alone (meta: {meta_op})")
-        print(f"  ✅ Pedido Alone: {alone_op} PDVs alone / meta {meta_op}")
-        return df_resumo
-
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        print(f"  ❌ Erro: {e}"); return pd.DataFrame()
-
-def processar_pedido_alone(conteudo_bytes):
-    """
-    Processa o relatório de Pedido Alone (export do BI Digitalização).
-    Colunas: unb_pdv | Pedidos | Pedidos Independentes | %Pedidos Independentes
-    Cruza com pdv_base para trazer setor, nome_fantasia, dia_visita.
-    PDV alone = Pedidos Independentes > 0.
-    Gera: spo_pedido_alone_resumo e spo_pedido_alone_detalhe
-    """
-    import io as _io
-    print("📂 Processando PDV com Compra Independente (SPO Item 19)...")
-
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
-
-    try:
-        try:
-            df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
-        except Exception:
-            df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
-
-        df.columns = [c.strip() for c in df.columns]
-
-        # Filtrar linhas válidas (unb_pdv no formato XXXXXXX_XXXXX)
-        mask_valid = df["unb_pdv"].astype(str).str.match(r"^\d+_\d+$")
-        df = df[mask_valid].copy()
-        print(f"  Linhas válidas: {len(df)}")
-
-        # Extrair código do PDV (parte após o _) e normalizar (remover zeros à esquerda)
-        df["cod_pdv"] = df["unb_pdv"].astype(str).str.split("_").str[1]
-        # Normalizar removendo .0 de floats se houver
-        def norm_alone(v):
-            s = str(v).strip()
-            if s.endswith(".0"):
-                s = s[:-2]
-            return s
-        df["cod_pdv_norm"] = df["cod_pdv"].apply(norm_alone)
-
-        # Carregar pdv_base para cruzamento
-        df_base = ler_aba("pdv_base")
-        if not df_base.empty:
-            df_base["_cod"] = df_base["cod_pdv"].astype(str).str.strip()
-            mapa_setor  = df_base.set_index("_cod")["setor"].to_dict()
-            # nome_fantasia é o campo correto na pdv_base
-            if "nome_fantasia" in df_base.columns:
-                mapa_nome = df_base.set_index("_cod")["nome_fantasia"].to_dict()
-            elif "nome_pdv" in df_base.columns:
-                mapa_nome = df_base.set_index("_cod")["nome_pdv"].to_dict()
-            else:
-                mapa_nome = {}
-            mapa_visita = df_base.set_index("_cod")["dia_visita"].to_dict() if "dia_visita" in df_base.columns else {}
-        else:
-            mapa_setor = mapa_nome = mapa_visita = {}
-
-        df["setor"]      = df["cod_pdv_norm"].map(mapa_setor).fillna("").astype(str)
-        df["nome_pdv"]   = df["cod_pdv_norm"].map(mapa_nome).fillna("").astype(str)
-        df["dia_visita"] = df["cod_pdv_norm"].map(mapa_visita).fillna("").astype(str)
-
-        # PDV alone = Pedidos Independentes > 0
-        df["_alone"]         = pd.to_numeric(df["Pedidos Independentes"], errors="coerce").fillna(0) > 0
-        df["_pedidos_alone"] = pd.to_numeric(df["Pedidos Independentes"], errors="coerce").fillna(0).astype(int)
-        df["_pedidos_total"] = pd.to_numeric(df["Pedidos"], errors="coerce").fillna(0).astype(int)
-
-        mes_ref = date.today().strftime("%Y-%m")
-        meta_op = META_ALONE.get(mes_ref, 0)
-
-        # ── Detalhe ──────────────────────────────────────────────────────────
-        df_det = df[df["setor"].isin(SETORES_LOCAL)][
-            ["cod_pdv_norm","nome_pdv","setor","dia_visita","_pedidos_total","_pedidos_alone","_alone"]
-        ].copy()
-        df_det.columns = ["cod_pdv","nome_pdv","setor","dia_visita","pedidos_total","pedidos_alone","is_alone"]
-        df_det["is_alone"] = df_det["is_alone"].map({True: "SIM", False: "NÃO"})
-        df_det["mes_referencia"] = mes_ref
-        sobrescrever_aba("spo_pedido_alone_detalhe", df_det)
-
-        # ── Resumo por setor ─────────────────────────────────────────────────
-        resumo = []
-        df_s = df[df["setor"].isin(SETORES_LOCAL)]
-
-        for setor in sorted(df_s["setor"].unique()):
-            grp = df_s[df_s["setor"] == setor]
-            alone  = int(grp["_alone"].sum())
-            total  = len(grp)
-            resumo.append({
-                "setor":          setor,
-                "pdvs_alone":     alone,
-                "pdvs_total":     total,
-                "mes_referencia": mes_ref,
-            })
-            print(f"  Setor {setor}: {alone}/{total} PDVs alone")
-
-        # Total operação
-        alone_op = int(df_s["_alone"].sum())
-        total_op = len(df_s)
-        resumo.append({
-            "setor":          "OPERACAO",
-            "pdvs_alone":     alone_op,
-            "pdvs_total":     total_op,
-            "meta":           meta_op,
-            "ok":             "OK" if alone_op >= meta_op else "NOK",
-            "mes_referencia": mes_ref,
-        })
 
         df_resumo = pd.DataFrame(resumo)
         sobrescrever_aba("spo_pedido_alone_resumo", df_resumo)
