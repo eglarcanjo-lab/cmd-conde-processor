@@ -2539,3 +2539,103 @@ def processar_rgb(conteudo_bytes):
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"  ❌ Erro: {e}"); return pd.DataFrame()
+
+
+# ─── SPO — CUPONS DIGITAIS SCORE 5 (Item 21) ─────────────────────────────────
+
+MESES_PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",
+            7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
+
+def processar_cupons_digitais(conteudo_bytes):
+    """
+    Processa o planificador de Cupons Digitais Score 5.
+    Colunas: GV, RN, PDV, Nome PDV, Bloqueio, Mês, Cupons, Campanha, Data Próxima Visita
+    
+    Totalizador: Bloqueio=Não + Mês=vigente → soma de cupons por setor
+    Detalhe: Bloqueio=Não + sem resgate no mês vigente → PDVs pendentes
+    
+    Gera: spo_cupons_resumo e spo_cupons_detalhe
+    """
+    import io as _io
+    print("📂 Processando Cupons Digitais Score 5 (SPO Item 21)...")
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    try:
+        try:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
+        except Exception:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
+
+        df.columns = [c.strip() for c in df.columns]
+
+        # Mês vigente no formato do arquivo: Mai/2026
+        hoje = date.today()
+        mes_vigente = f"{MESES_PT[hoje.month]}/{hoje.year}"
+        mes_ref = hoje.strftime("%Y-%m")
+        print(f"  Mês vigente: {mes_vigente}")
+
+        # Filtrar só setores locais
+        df["setor"] = df["RN"].astype(str).str.strip()
+        df["gv"]    = df["GV"].astype(str).str.strip()
+        df = df[df["setor"].isin(SETORES_LOCAL)].copy()
+        df["_cupons"]   = pd.to_numeric(df["Cupons"], errors="coerce").fillna(0)
+        df["_bloqueio"] = df["Bloqueio"].astype(str).str.strip() == "Não"
+        df["_mes"]      = df["Mês"].astype(str).str.strip()
+
+        # PDVs únicos por setor (para identificar quem NÃO resgatou)
+        pdvs_resgataram = set(
+            df[(df["_bloqueio"]) & (df["_mes"] == mes_vigente)]["PDV"].astype(str).str.strip().unique()
+        )
+
+        # ── Totalizador ───────────────────────────────────────────────────────
+        df_tot = df[(df["_bloqueio"]) & (df["_mes"] == mes_vigente)].copy()
+        resumo = []
+        for setor in sorted(df_tot["setor"].unique()):
+            grp = df_tot[df_tot["setor"] == setor]
+            cupons = int(grp["_cupons"].sum())
+            resumo.append({"setor": setor, "gv": grp["gv"].iloc[0], "cupons_mes": cupons, "mes_referencia": mes_ref})
+            print(f"  Setor {setor}: {cupons} cupons no mês")
+
+        total_op = int(df_tot["_cupons"].sum())
+        resumo.append({"setor": "OPERACAO", "gv": "", "cupons_mes": total_op, "mes_referencia": mes_ref})
+
+        df_resumo = pd.DataFrame(resumo)
+        sobrescrever_aba("spo_cupons_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Cupons Digitais", "✅ OK",
+                                 f"Operação: {total_op} cupons em {mes_vigente}")
+        print(f"  ✅ Cupons mês: {total_op} total")
+
+        # ── Detalhe: PDVs sem resgate no mês vigente ──────────────────────────
+        # Pega todos os PDVs desbloqueados que NÃO resgataram no mês vigente
+        # Mostra os cupons disponíveis (último registro de cada PDV/campanha)
+        df_nao = df[(df["_bloqueio"]) & (~df["PDV"].astype(str).str.strip().isin(pdvs_resgataram))].copy()
+        
+        # Agrupa por PDV + Campanha, pega o último registro (mais recente)
+        df_nao["_pdv"] = df_nao["PDV"].astype(str).str.strip()
+        df_det_rows = []
+        for (pdv, camp), grp in df_nao.groupby(["_pdv", "Campanha"]):
+            row = grp.sort_values("Mês").iloc[-1]
+            df_det_rows.append({
+                "pdv":             pdv,
+                "nome_pdv":        str(row.get("Nome PDV","")).strip(),
+                "setor":           str(row.get("RN","")).strip(),
+                "gv":              str(row.get("GV","")).strip(),
+                "campanha":        camp,
+                "cupons":          int(row["_cupons"]),
+                "proxima_visita":  str(row.get("Data Próxima Visita","")).split(" ")[0],
+                "ultimo_resgate":  str(row.get("Data Último Resgate","")).split(" ")[0],
+                "mes_referencia":  mes_ref,
+            })
+
+        df_detalhe = pd.DataFrame(df_det_rows) if df_det_rows else pd.DataFrame()
+        if not df_detalhe.empty:
+            sobrescrever_aba("spo_cupons_detalhe", df_detalhe)
+            print(f"  ✅ Detalhe: {len(df_detalhe)} registros pendentes")
+        else:
+            print("  ⚠️ Nenhum PDV pendente")
+
+        return df_resumo
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"  ❌ Erro: {e}"); return pd.DataFrame()
