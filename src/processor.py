@@ -2869,3 +2869,159 @@ def processar_scanntech(conteudo_bytes):
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"  ❌ Erro: {e}"); return pd.DataFrame()
+
+
+# ─── SPO — PORTFÓLIO IDEAL SCORE 5 (Item 24) ─────────────────────────────────
+
+META_PORTFOLIO_IDEAL = 46  # % placeholder
+
+# Mapeamento categoria META → colunas de realizado
+# META category: quais colunas do realizado representam aquela categoria
+MAPA_CATEGORIA_REAL = {
+    "600":      {"HE": ["SPT 600","STL 600","STL PG 600","BUD 600","COR 600","ORI 600 ","OUTROS 600"],
+                 "CORE": ["AP 600","BC 600","BUD 600 ","ORI 600","SK 600","SPT 600 ","STL 600 ","STL PG 600 "," OUTROS 600 "]},
+    "LN":       {"HE": ["BUD LN","COR LN","STL LN","STL PG LN","SPT LN","MIC LN","OUTROS LN"],
+                 "CORE": []},
+    "LN ZERO":  {"HE": ["BUD LN ZERO","COR LN ZERO"],
+                 "CORE": []},
+    "LITRINHO": {"HE": [],
+                 "CORE": ["AP 1000","BC 1000","BUD 1000","ORI 1000","SK 1000","OUTROS 1000"]},
+    "INTEIRA":  {"HE": [],
+                 "CORE": ["AP 300","BC 300","BUD 300","ORI 300","SK 300","OUTROS 300"]},
+    "LITRO":    {"HE": [],
+                 "CORE": ["AP 1000","BC 1000","BUD 1000","ORI 1000","SK 1000","OUTROS 1000"]},
+    "RGB":      {"HE": [],
+                 "CORE": ["AP 600","BC 600","BUD 600 ","ORI 600","SK 600","SPT 600 ","STL 600 ","STL PG 600 "," OUTROS 600 "]},
+}
+
+COLS_META_PI = ["600","LN","LN ZERO","LITRINHO","INTEIRA","LITRO","RGB"]
+
+def processar_portfolio_ideal(conteudo_bytes):
+    """
+    Processa o ON_TRADE para Portfólio Ideal Score 5.
+    META: colunas L-R (índices 11-17)
+    REAL HE: colunas T-AI (índices 19-34)
+    REAL CORE: colunas AJ-BD (índices 35-55)
+    Coluna S (índice 18): descartar
+    
+    Portfólio Ideal = PDV que atingiu TODAS as categorias da sua meta.
+    Detalhe: mostra categorias faltantes por PDV.
+    Gera: spo_portfolio_ideal_resumo e spo_portfolio_ideal_detalhe
+    """
+    import io as _io
+    print("📂 Processando Portfólio Ideal Score 5 (SPO Item 24)...")
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    try:
+        try:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
+        except Exception:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
+
+        df.columns = [c.strip() for c in df.columns]
+        # Re-aplicar strip nas colunas do df também
+        df = df.rename(columns=lambda c: c.strip())
+
+        df["setor"] = df["RN"].astype(str).str.strip()
+        df["gv"]    = df["GV"].astype(str).str.strip()
+        df = df[df["setor"].isin(SETORES_LOCAL)].copy()
+        print(f"  PDVs nos setores locais: {len(df)}")
+
+        # Cruzar com pdv_base para dia_visita
+        df_base = ler_aba("pdv_base")
+        if not df_base.empty:
+            def norm(v):
+                s = str(v).strip()
+                if s.endswith(".0"): s = s[:-2]
+                return s
+            df_base["_cod"] = df_base["cod_pdv"].apply(norm)
+            mapa_visita = df_base.set_index("_cod")["dia_visita"].to_dict() if "dia_visita" in df_base.columns else {}
+        else:
+            mapa_visita = {}
+
+        # Extrair cod_pdv da CHAVE PDV
+        df["_cod_pdv"] = df["CHAVE PDV"].astype(str).str.split("_").str[-1].str.strip()
+        df["dia_visita"] = df["_cod_pdv"].apply(norm if not df_base.empty else str).map(mapa_visita).fillna("").astype(str)
+
+        mes_ref = date.today().strftime("%Y-%m")
+
+        def categorias_faltantes(row):
+            base = str(row.get("BASE","")).strip().upper()
+            faltando = []
+            for cat in COLS_META_PI:
+                val_meta = str(row.get(cat,"")).strip()
+                if val_meta in ("","nan","0","None") or not val_meta:
+                    continue
+                # Tem meta nessa categoria — verificar realizado
+                seg = "HE" if "HIGH END" in base else "CORE"
+                cols_real = MAPA_CATEGORIA_REAL.get(cat, {}).get(seg, [])
+                # Filtrar só colunas que existem no df
+                cols_real = [c for c in cols_real if c in row.index]
+                if not cols_real:
+                    continue
+                # Soma do realizado nessa categoria
+                total_real = sum(
+                    int(str(row.get(c,"0")).strip() or "0")
+                    for c in cols_real
+                    if str(row.get(c,"")).strip() not in ("","nan","None")
+                )
+                if total_real == 0:
+                    faltando.append(cat)
+            return faltando
+
+        # Calcular faltantes por PDV
+        df["_faltantes"] = df.apply(categorias_faltantes, axis=1)
+        df["_bateu"] = df["BATEU META"].astype(str).str.strip() == "1"
+        df["_faltantes_str"] = df["_faltantes"].apply(lambda x: ", ".join(x) if x else "—")
+
+        # ── Detalhe ──────────────────────────────────────────────────────────
+        df_det = df[["_cod_pdv","NOME PDV","setor","gv","BASE","VISITA","dia_visita",
+                     "_bateu","_faltantes_str"]].copy()
+        df_det.columns = ["cod_pdv","nome_pdv","setor","gv","base","dia_rota",
+                          "dia_visita","portfolio_ideal","itens_faltantes"]
+        df_det["portfolio_ideal"] = df_det["portfolio_ideal"].map({True:"SIM", False:"NÃO"})
+        df_det["mes_referencia"] = mes_ref
+        sobrescrever_aba("spo_portfolio_ideal_detalhe", df_det)
+
+        # ── Resumo por setor ─────────────────────────────────────────────────
+        resumo = []
+        for setor in sorted(df["setor"].unique()):
+            grp = df[df["setor"] == setor]
+            total  = len(grp)
+            ideais = int(grp["_bateu"].sum())
+            pct    = round(ideais / total * 100, 1) if total > 0 else 0
+            resumo.append({
+                "setor":          setor,
+                "gv":             grp["gv"].iloc[0],
+                "pdvs_total":     total,
+                "pdvs_ideais":    ideais,
+                "pct":            pct,
+                "ok":             "OK" if pct >= META_PORTFOLIO_IDEAL else "NOK",
+                "mes_referencia": mes_ref,
+            })
+            print(f"  Setor {setor}: {ideais}/{total} ({pct}%)")
+
+        total_op  = len(df)
+        ideais_op = int(df["_bateu"].sum())
+        pct_op    = round(ideais_op / total_op * 100, 1) if total_op > 0 else 0
+        resumo.append({
+            "setor":          "OPERACAO",
+            "gv":             "",
+            "pdvs_total":     total_op,
+            "pdvs_ideais":    ideais_op,
+            "pct":            pct_op,
+            "meta":           META_PORTFOLIO_IDEAL,
+            "ok":             "OK" if pct_op >= META_PORTFOLIO_IDEAL else "NOK",
+            "mes_referencia": mes_ref,
+        })
+
+        df_resumo = pd.DataFrame(resumo)
+        sobrescrever_aba("spo_portfolio_ideal_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Portfólio Ideal Score 5", "✅ OK",
+                                 f"Operação: {pct_op}% ({ideais_op}/{total_op} PDVs)")
+        print(f"  ✅ Portfólio Ideal: {pct_op}% ({ideais_op}/{total_op})")
+        return df_resumo
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"  ❌ Erro: {e}"); return pd.DataFrame()
