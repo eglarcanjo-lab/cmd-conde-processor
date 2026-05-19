@@ -2657,3 +2657,115 @@ def processar_cupons_digitais(conteudo_bytes):
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"  ❌ Erro: {e}"); return pd.DataFrame()
+
+
+# ─── SPO — % LOJAS IDEAIS VIZINHANÇA (Item 22) ───────────────────────────────
+
+META_LOJA_IDEAL = 40  # % — placeholder
+
+def processar_loja_ideal(conteudo_bytes):
+    """
+    Processa o Planificador de Loja Ideal Vizinhança.
+    Loja Ideal = Pontuação Total >= 60.
+    Setores: 101, 102, 103 (OFF Trade / GV1).
+    Cruza Cód. PDV com pdv_base para nome real.
+    Gera: spo_loja_ideal_resumo e spo_loja_ideal_detalhe
+    """
+    import io as _io
+    print("📂 Processando Loja Ideal Vizinhança (SPO Item 22)...")
+    SETORES_LOCAL = {"101","102","103"}
+
+    try:
+        try:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
+        except Exception:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
+
+        df.columns = [c.strip() for c in df.columns]
+        df["setor"] = df["Setor Rn"].astype(str).str.strip()
+        df["gv"]    = df["Setor Gv"].astype(str).str.strip()
+        df = df[df["setor"].isin(SETORES_LOCAL)].copy()
+        print(f"  PDVs nos setores Vizinhança: {len(df)}")
+
+        if df.empty:
+            return pd.DataFrame()
+
+        # Pontuações
+        df["_pts_total"]     = pd.to_numeric(df["Pontuação Total"], errors="coerce").fillna(0)
+        df["_pts_sort"]      = pd.to_numeric(df["[Sortimento] Pontos"], errors="coerce").fillna(0)
+        df["_pts_exec"]      = pd.to_numeric(df["[Execução] Pontos"], errors="coerce").fillna(0)
+        df["_pts_desafio"]   = pd.to_numeric(df["[Desafio] Pontos"], errors="coerce").fillna(0)
+        df["_loja_ideal"]    = df["_pts_total"] >= 60
+        df["_cod_pdv"]       = df["Cód. PDV"].astype(str).str.strip()
+
+        # Cruzar com pdv_base para nome real
+        df_base = ler_aba("pdv_base")
+        if not df_base.empty:
+            def norm(v):
+                s = str(v).strip()
+                if s.endswith(".0"): s = s[:-2]
+                return s
+            df_base["_cod"] = df_base["cod_pdv"].apply(norm)
+            col_nome = "nome_fantasia" if "nome_fantasia" in df_base.columns else "nome_pdv"
+            mapa_nome = df_base.set_index("_cod")[col_nome].to_dict() if col_nome in df_base.columns else {}
+            mapa_dia  = df_base.set_index("_cod")["dia_visita"].to_dict() if "dia_visita" in df_base.columns else {}
+        else:
+            mapa_nome = mapa_dia = {}
+
+        df["nome_pdv"]   = df["_cod_pdv"].apply(norm).map(mapa_nome).fillna(df["Nome do Pdv"]).astype(str)
+        df["dia_visita"] = df["_cod_pdv"].apply(norm).map(mapa_dia).fillna("").astype(str)
+
+        mes_ref = date.today().strftime("%Y-%m")
+
+        # ── Detalhe ──────────────────────────────────────────────────────────
+        df_det = df[["_cod_pdv","nome_pdv","setor","gv","dia_visita",
+                     "_pts_total","_pts_sort","_pts_exec","_pts_desafio","_loja_ideal"]].copy()
+        df_det.columns = ["cod_pdv","nome_pdv","setor","gv","dia_visita",
+                          "pts_total","pts_sortimento","pts_execucao","pts_desafio","loja_ideal"]
+        df_det["loja_ideal"]    = df_det["loja_ideal"].map({True:"SIM", False:"NÃO"})
+        df_det["mes_referencia"] = mes_ref
+        sobrescrever_aba("spo_loja_ideal_detalhe", df_det)
+
+        # ── Resumo por setor ─────────────────────────────────────────────────
+        resumo = []
+        for setor in sorted(df["setor"].unique()):
+            grp = df[df["setor"] == setor]
+            total  = len(grp)
+            ideais = int(grp["_loja_ideal"].sum())
+            pct    = round(ideais / total * 100, 1) if total > 0 else 0
+            resumo.append({
+                "setor":          setor,
+                "gv":             grp["gv"].iloc[0],
+                "pdvs_total":     total,
+                "pdvs_ideais":    ideais,
+                "pct":            pct,
+                "meta":           META_LOJA_IDEAL,
+                "ok":             "OK" if pct >= META_LOJA_IDEAL else "NOK",
+                "mes_referencia": mes_ref,
+            })
+            print(f"  Setor {setor}: {ideais}/{total} Lojas Ideais ({pct}%)")
+
+        total_op  = len(df)
+        ideais_op = int(df["_loja_ideal"].sum())
+        pct_op    = round(ideais_op / total_op * 100, 1) if total_op > 0 else 0
+        resumo.append({
+            "setor":          "OPERACAO",
+            "gv":             "1",
+            "pdvs_total":     total_op,
+            "pdvs_ideais":    ideais_op,
+            "pct":            pct_op,
+            "meta":           META_LOJA_IDEAL,
+            "ok":             "OK" if pct_op >= META_LOJA_IDEAL else "NOK",
+            "mes_referencia": mes_ref,
+        })
+
+        df_resumo = pd.DataFrame(resumo)
+        sobrescrever_aba("spo_loja_ideal_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Loja Ideal Vizinhança", "✅ OK",
+                                 f"Operação: {pct_op}% ({ideais_op}/{total_op} Lojas Ideais)")
+        print(f"  ✅ Loja Ideal: {pct_op}% ({ideais_op}/{total_op})")
+        return df_resumo
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"  ❌ Erro: {e}"); return pd.DataFrame()
