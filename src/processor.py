@@ -2582,6 +2582,20 @@ def processar_cupons_digitais(conteudo_bytes):
         df["_bloqueio"] = df["Bloqueio"].astype(str).str.strip() == "Não"
         df["_mes"]      = df["Mês"].astype(str).str.strip()
 
+        # Cruzar com pdv_base para dia_visita
+        df_base = ler_aba("pdv_base")
+        if not df_base.empty:
+            def norm(v):
+                s = str(v).strip()
+                if s.endswith(".0"): s = s[:-2]
+                return s
+            df_base["_cod"] = df_base["cod_pdv"].apply(norm)
+            mapa_visita = df_base.set_index("_cod")["dia_visita"].to_dict() if "dia_visita" in df_base.columns else {}
+        else:
+            mapa_visita = {}
+        df["_pdv_norm"] = df["PDV"].astype(str).str.strip().apply(norm)
+        df["dia_visita"] = df["_pdv_norm"].map(mapa_visita).fillna("").astype(str)
+
         # ── Totalizador: Bloqueio=Não + Mês vigente ─────────────────────────
         df_tot = df[(df["_bloqueio"]) & (df["_mes"] == mes_vigente)].copy()
         resumo = []
@@ -2627,6 +2641,7 @@ def processar_cupons_digitais(conteudo_bytes):
                 "cupons":          int(row["_cupons"]),
                 "proxima_visita":  str(row.get("Data Próxima Visita","")).split(" ")[0],
                 "ultimo_resgate":  str(row.get("Data Último Resgate","")).split(" ")[0],
+                "dia_visita":      str(row.get("dia_visita","")).strip(),
                 "mes_referencia":  mes_ref,
             })
 
