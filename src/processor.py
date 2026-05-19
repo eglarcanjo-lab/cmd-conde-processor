@@ -2769,3 +2769,103 @@ def processar_loja_ideal(conteudo_bytes):
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"  ❌ Erro: {e}"); return pd.DataFrame()
+
+
+# ─── SPO — EXPANSÃO SCANNTECH (Item 23) ──────────────────────────────────────
+
+META_SCANNTECH = 20  # placeholder — PDVs ativos
+
+def processar_scanntech(conteudo_bytes):
+    """
+    Processa a base de Expansão Scanntech.
+    Ativo = Descrição Ambev começa com "ATIVO".
+    Cruza Cód. PDV com pdv_base para setor e dia_visita.
+    Gera: spo_scanntech_resumo e spo_scanntech_detalhe
+    """
+    import io as _io
+    print("📂 Processando Expansão Scanntech (SPO Item 23)...")
+
+    try:
+        try:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
+        except Exception:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
+
+        df.columns = [c.strip() for c in df.columns]
+        print(f"  Total PDVs na base: {len(df)}")
+
+        # Status: ativo = começa com "ATIVO"
+        df["_status"]  = df["Descrição Ambev"].astype(str).str.strip()
+        df["_ativo"]   = df["_status"].str.upper().str.startswith("ATIVO")
+        df["_cod_pdv"] = df["Cód. PDV"].astype(str).str.strip()
+        df["_gv"]      = df["Cód. GV"].astype(str).str.strip()
+        df["_nome"]    = df["Nome PDV"].astype(str).str.strip()
+
+        # Cruzar com pdv_base para setor e dia_visita
+        df_base = ler_aba("pdv_base")
+        if not df_base.empty:
+            def norm(v):
+                s = str(v).strip()
+                if s.endswith(".0"): s = s[:-2]
+                return s
+            df_base["_cod"] = df_base["cod_pdv"].apply(norm)
+            mapa_setor  = df_base.set_index("_cod")["setor"].to_dict()
+            mapa_visita = df_base.set_index("_cod")["dia_visita"].to_dict() if "dia_visita" in df_base.columns else {}
+        else:
+            mapa_setor = mapa_visita = {}
+
+        df["setor"]      = df["_cod_pdv"].apply(norm if df_base.empty == False else str).map(mapa_setor).fillna("").astype(str)
+        df["dia_visita"] = df["_cod_pdv"].apply(norm if df_base.empty == False else str).map(mapa_visita).fillna("").astype(str)
+
+        mes_ref = date.today().strftime("%Y-%m")
+
+        # ── Detalhe ──────────────────────────────────────────────────────────
+        df_det = df[["_cod_pdv","_nome","setor","_gv","dia_visita","_status","_ativo"]].copy()
+        df_det.columns = ["cod_pdv","nome_pdv","setor","gv","dia_visita","status_scanntech","is_ativo"]
+        df_det["is_ativo"] = df_det["is_ativo"].map({True:"SIM", False:"NÃO"})
+        df_det["mes_referencia"] = mes_ref
+        sobrescrever_aba("spo_scanntech_detalhe", df_det)
+
+        # ── Resumo por GV ─────────────────────────────────────────────────────
+        # Como não temos setor RN diretamente, agrupamos por GV
+        resumo = []
+        for gv in sorted(df["_gv"].unique()):
+            grp = df[df["_gv"] == gv]
+            total  = len(grp)
+            ativos = int(grp["_ativo"].sum())
+            resumo.append({
+                "gv":             gv,
+                "setor":          f"GV{gv}",
+                "pdvs_total":     total,
+                "pdvs_ativos":    ativos,
+                "mes_referencia": mes_ref,
+            })
+            print(f"  GV{gv}: {ativos}/{total} ativos")
+
+        # Total operação
+        total_op  = len(df)
+        ativos_op = int(df["_ativo"].sum())
+        resumo.append({
+            "gv":             "",
+            "setor":          "OPERACAO",
+            "pdvs_total":     total_op,
+            "pdvs_ativos":    ativos_op,
+            "meta":           META_SCANNTECH,
+            "ok":             "OK" if ativos_op >= META_SCANNTECH else "NOK",
+            "mes_referencia": mes_ref,
+        })
+
+        # Distribuição de status
+        status_counts = df["_status"].value_counts().to_dict()
+        print(f"  Status: {status_counts}")
+
+        df_resumo = pd.DataFrame(resumo)
+        sobrescrever_aba("spo_scanntech_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Expansão Scanntech", "✅ OK",
+                                 f"Operação: {ativos_op}/{total_op} PDVs ativos")
+        print(f"  ✅ Scanntech: {ativos_op}/{total_op} ativos")
+        return df_resumo
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"  ❌ Erro: {e}"); return pd.DataFrame()
