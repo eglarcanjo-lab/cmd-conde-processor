@@ -2582,12 +2582,7 @@ def processar_cupons_digitais(conteudo_bytes):
         df["_bloqueio"] = df["Bloqueio"].astype(str).str.strip() == "Não"
         df["_mes"]      = df["Mês"].astype(str).str.strip()
 
-        # PDVs únicos por setor (para identificar quem NÃO resgatou)
-        pdvs_resgataram = set(
-            df[(df["_bloqueio"]) & (df["_mes"] == mes_vigente)]["PDV"].astype(str).str.strip().unique()
-        )
-
-        # ── Totalizador ───────────────────────────────────────────────────────
+        # ── Totalizador: Bloqueio=Não + Mês vigente ─────────────────────────
         df_tot = df[(df["_bloqueio"]) & (df["_mes"] == mes_vigente)].copy()
         resumo = []
         for setor in sorted(df_tot["setor"].unique()):
@@ -2605,15 +2600,23 @@ def processar_cupons_digitais(conteudo_bytes):
                                  f"Operação: {total_op} cupons em {mes_vigente}")
         print(f"  ✅ Cupons mês: {total_op} total")
 
-        # ── Detalhe: PDVs sem resgate no mês vigente ──────────────────────────
-        # Pega todos os PDVs desbloqueados que NÃO resgataram no mês vigente
-        # Mostra os cupons disponíveis (último registro de cada PDV/campanha)
-        df_nao = df[(df["_bloqueio"]) & (~df["PDV"].astype(str).str.strip().isin(pdvs_resgataram))].copy()
+        # ── Detalhe: PDV+Campanha com cupons disponíveis e SEM resgate no mês vigente
+        # Identifica pares PDV+Campanha que já resgataram no mês vigente
+        df["_pdv"] = df["PDV"].astype(str).str.strip()
+        df["_camp"] = df["Campanha"].astype(str).str.strip()
         
-        # Agrupa por PDV + Campanha, pega o último registro (mais recente)
-        df_nao["_pdv"] = df_nao["PDV"].astype(str).str.strip()
+        resgatados_mes = set(
+            df[(df["_bloqueio"]) & (df["_mes"] == mes_vigente)]
+            .apply(lambda r: (r["_pdv"], r["_camp"]), axis=1)
+        )
+
+        # Pega todos os registros desbloqueados e filtra fora os que já resgataram no mês
+        df_nao = df[df["_bloqueio"]].copy()
+        df_nao = df_nao[~df_nao.apply(lambda r: (r["_pdv"], r["_camp"]) in resgatados_mes, axis=1)]
+
+        # Agrupa por PDV + Campanha, pega o registro mais recente
         df_det_rows = []
-        for (pdv, camp), grp in df_nao.groupby(["_pdv", "Campanha"]):
+        for (pdv, camp), grp in df_nao.groupby(["_pdv", "_camp"]):
             row = grp.sort_values("Mês").iloc[-1]
             df_det_rows.append({
                 "pdv":             pdv,
