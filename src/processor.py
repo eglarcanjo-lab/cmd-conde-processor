@@ -3009,3 +3009,120 @@ def processar_portfolio_ideal(conteudo_bytes):
     except Exception as e:
         import traceback; traceback.print_exc()
         print(f"  ❌ Erro: {e}"); return pd.DataFrame()
+
+
+# ─── SPO — ATENDIMENTO PRODUTIVO (Item 5) ────────────────────────────────────
+
+META_AP = 0.90  # 90% dos RNs com AP OK
+
+def processar_atendimento_produtivo(conteudo_bytes):
+    """
+    Processa o relatório de Atendimento Produtivo (BI exportado).
+    Colunas principais:
+      Cod Setor = RN/Setor
+      Cod Gv    = GV
+      Segmento  = Off_Independente / On_Trade
+      KPIs OK   = quantos dos 4 pilares o RN bateu (0-4)
+      AP OK     = Sim/Não — RN com Atendimento Produtivo
+      Meta/Real/GAP       = Positivação Tasks Compra
+      Meta.1/Real.1/GAP.1 = Carteira Ideal (Compradores)
+      Meta.2/Real.2/GAP.2 = GPS
+      Meta.3/Real.3/GAP.3 = Rota Efetiva
+    Gera: spo_ap_resumo e spo_ap_detalhe
+    """
+    import io as _io
+    print("📂 Processando Atendimento Produtivo (SPO Item 5)...")
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    try:
+        try:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
+        except Exception:
+            df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
+
+        df.columns = [c.strip() for c in df.columns]
+        df["setor"] = df["Cod Setor"].astype(str).str.strip()
+        df["gv"]    = df["Cod Gv"].astype(str).str.strip()
+        df = df[df["setor"].isin(SETORES_LOCAL)].copy()
+        print(f"  RNs nos setores locais: {len(df)}")
+
+        def pct(v):
+            try: return round(float(v) * 100, 1)
+            except: return None
+
+        mes_ref = date.today().strftime("%Y-%m")
+
+        # ── Detalhe por RN ────────────────────────────────────────────────────
+        df_det = []
+        for _, row in df.iterrows():
+            df_det.append({
+                "setor":           row["setor"],
+                "gv":              row["gv"],
+                "segmento":        str(row.get("Segmento","")).strip(),
+                "ap_ok":           str(row.get("AP OK","")).strip(),
+                "kpis_ok":         str(row.get("KPIs OK","")).strip(),
+                # Positivação Tasks Compra
+                "positiv_meta":    pct(row.get("Meta","")),
+                "positiv_real":    pct(row.get("Real","")),
+                "positiv_gap":     pct(row.get("GAP","")),
+                # Carteira Ideal
+                "carteira_meta":   str(row.get("Meta.1","")).strip(),
+                "carteira_real":   str(row.get("Real.1","")).strip(),
+                "carteira_gap":    str(row.get("GAP.1","")).strip(),
+                # GPS
+                "gps_meta":        pct(row.get("Meta.2","")),
+                "gps_real":        pct(row.get("Real.2","")),
+                "gps_gap":         pct(row.get("GAP.2","")),
+                # Rota Efetiva
+                "rota_meta":       pct(row.get("Meta.3","")),
+                "rota_real":       pct(row.get("Real.3","")),
+                "rota_gap":        pct(row.get("GAP.3","")),
+                "mes_referencia":  mes_ref,
+            })
+
+        df_detalhe = pd.DataFrame(df_det)
+        sobrescrever_aba("spo_ap_detalhe", df_detalhe)
+
+        # ── Resumo por GV e operação ──────────────────────────────────────────
+        total_op = len(df)
+        ap_ok_op = int((df["AP OK"].astype(str).str.strip().str.upper() == "SIM").sum())
+        pct_op   = round(ap_ok_op / total_op * 100, 1) if total_op > 0 else 0
+
+        resumo = []
+        for gv in sorted(df["gv"].unique()):
+            grp = df[df["gv"] == gv]
+            total = len(grp)
+            ap_ok = int((grp["AP OK"].astype(str).str.strip().str.upper() == "SIM").sum())
+            pct_gv = round(ap_ok / total * 100, 1) if total > 0 else 0
+            resumo.append({
+                "gv":             gv,
+                "setor":          f"GV{gv}",
+                "rns_total":      total,
+                "rns_ap_ok":      ap_ok,
+                "pct":            pct_gv,
+                "ok":             "OK" if pct_gv >= META_AP * 100 else "NOK",
+                "mes_referencia": mes_ref,
+            })
+            print(f"  GV{gv}: {ap_ok}/{total} RNs com AP OK ({pct_gv}%)")
+
+        resumo.append({
+            "gv":             "",
+            "setor":          "OPERACAO",
+            "rns_total":      total_op,
+            "rns_ap_ok":      ap_ok_op,
+            "pct":            pct_op,
+            "meta":           round(META_AP * 100, 1),
+            "ok":             "OK" if pct_op >= META_AP * 100 else "NOK",
+            "mes_referencia": mes_ref,
+        })
+
+        df_resumo = pd.DataFrame(resumo)
+        sobrescrever_aba("spo_ap_resumo", df_resumo)
+        atualizar_status_arquivo("SPO - Atendimento Produtivo", "✅ OK",
+                                 f"Operação: {pct_op}% ({ap_ok_op}/{total_op} RNs)")
+        print(f"  ✅ AP: {pct_op}% ({ap_ok_op}/{total_op} RNs com AP OK)")
+        return df_resumo
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        print(f"  ❌ Erro: {e}"); return pd.DataFrame()

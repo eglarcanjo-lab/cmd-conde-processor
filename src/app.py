@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -208,6 +208,14 @@ def upload_ambos():
         except Exception as e:
             traceback.print_exc()
             resultados["spo_portfolio_ideal"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "spo_ap" in arquivos:
+        try:
+            processar_atendimento_produtivo(arquivos["spo_ap"].read())
+            resultados["spo_ap"] = "✅ Atendimento Produtivo processado"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["spo_ap"] = f"❌ Erro: {str(e)[:100]}"
 
     if "spo_rgb" in arquivos:
         try:
@@ -585,6 +593,20 @@ def upload_spo_portfolio_ideal():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("SPO - Portfólio Ideal Score 5", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+
+@app.route("/api/processar/spo-ap", methods=["POST"])
+def upload_spo_ap():
+    if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
+    try:
+        df = processar_atendimento_produtivo(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Atendimento Produtivo: {len(df)} linhas."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("SPO - Atendimento Produtivo", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 
