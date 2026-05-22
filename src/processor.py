@@ -1433,7 +1433,19 @@ def processar_dto_gc(conteudo_bytes):
         "coaching_status":    str(row.get("Status Rota Coaching", "NOK")).strip(),
     }]
 
-    df_out = pd.DataFrame(resultado)
+    df_novo = pd.DataFrame(resultado)
+
+    # Acumula por mês: mantém registros de outros meses, sobrescreve o mês atual
+    try:
+        df_existente = ler_aba("spo_dto_resumo")
+        if not df_existente.empty and "mes_referencia" in df_existente.columns:
+            df_outros = df_existente[df_existente["mes_referencia"] != mes_ref]
+            df_out = pd.concat([df_outros, df_novo], ignore_index=True)
+        else:
+            df_out = df_novo
+    except Exception:
+        df_out = df_novo
+
     sobrescrever_aba("spo_dto_resumo", df_out)
     atualizar_status_arquivo("SPO - DTO GC", "✅ OK", f"Matinal:{round(matinal_real)}/4 | Vesp:{round(vespertina_real)}/4 | Coach:{round(coaching_real)}/2")
     print(f"  ✅ DTO GC: Matinal {round(matinal_real)}/4 | Vespertina {round(vespertina_real)}/4 | Coaching {round(coaching_real)}/2 | Status: {resultado[0]['status_final']}")
