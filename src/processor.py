@@ -1722,41 +1722,52 @@ def calcular_tarefas_cerveja():
         mes_ref = date.today().strftime("%Y-%m")
 
         resumo = []
-        df_s = df[df["_setor"].isin(SETORES_LOCAL)]
+        df_s = df[df["_setor"].isin(SETORES_LOCAL)].copy()
 
+        # KPI 11 conta PDVs únicos com ≥1 task VALID (não o total de tasks)
+        # PDV com qualquer task válida = "bateu"
         for setor in sorted(df_s["_setor"].unique()):
             grp = df_s[df_s["_setor"] == setor]
-            total   = len(grp)
-            validas = int(grp["_valida"].sum())
-            pct     = round(validas / total * 100, 1) if total > 0 else 0
+            pdvs_total  = grp["cod_pdv"].nunique()
+            pdvs_ok     = grp[grp["_valida"]]["cod_pdv"].nunique()
+            pct         = round(pdvs_ok / pdvs_total * 100, 1) if pdvs_total > 0 else 0
             resumo.append({
-                "setor":          setor,
-                "tasks_total":    total,
-                "tasks_validas":  validas,
-                "pct":            pct,
-                "ok":             "OK" if pct >= META_TASKS_CERVEJA else "NOK",
+                "setor":         setor,
+                "pdvs_total":    pdvs_total,
+                "pdvs_ok":       pdvs_ok,
+                "pct":           pct,
+                "ok":            "OK" if pct >= META_TASKS_CERVEJA else "NOK",
                 "mes_referencia": mes_ref,
             })
-            print(f"  Setor {setor}: {validas}/{total} ({pct}%)")
+            print(f"  Setor {setor}: {pdvs_ok}/{pdvs_total} PDVs ({pct}%)")
 
         # Total operação
-        total_op   = len(df_s)
-        validas_op = int(df_s["_valida"].sum())
-        pct_op     = round(validas_op / total_op * 100, 1) if total_op > 0 else 0
+        pdvs_total_op = df_s["cod_pdv"].nunique()
+        pdvs_ok_op    = df_s[df_s["_valida"]]["cod_pdv"].nunique()
+        pct_op        = round(pdvs_ok_op / pdvs_total_op * 100, 1) if pdvs_total_op > 0 else 0
         resumo.append({
-            "setor":          "OPERACAO",
-            "tasks_total":    total_op,
-            "tasks_validas":  validas_op,
-            "pct":            pct_op,
-            "ok":             "OK" if pct_op >= META_TASKS_CERVEJA else "NOK",
+            "setor":         "OPERACAO",
+            "pdvs_total":    pdvs_total_op,
+            "pdvs_ok":       pdvs_ok_op,
+            "pct":           pct_op,
+            "ok":            "OK" if pct_op >= META_TASKS_CERVEJA else "NOK",
             "mes_referencia": mes_ref,
         })
 
         df_resumo = pd.DataFrame(resumo)
         sobrescrever_aba("spo_tasks_cerveja_resumo", df_resumo)
+
+        # Detalhe: PDVs com task em aberto (OPEN ou INVALID)
+        df_det = df_s.copy()
+        df_det["status_task"] = df["status"].astype(str).str.strip()
+        df_aberto = df_det[~df_det["_valida"]][["_setor","cod_pdv","nome_pdv","dia_visita","status_task","cluster_primario"]].drop_duplicates(subset=["cod_pdv"])
+        df_aberto.columns = ["setor","cod_pdv","nome_pdv","dia_visita","status_task","cluster"]
+        df_aberto["mes_referencia"] = mes_ref
+        sobrescrever_aba("spo_tasks_cerveja_detalhe", df_aberto)
+
         atualizar_status_arquivo("SPO - Tasks Cerveja", "✅ OK",
-                                 f"Operação: {pct_op}% ({validas_op}/{total_op} tasks)")
-        print(f"  ✅ Tasks Cerveja: {pct_op}% operação ({validas_op}/{total_op})")
+                                 f"Operação: {pct_op}% ({pdvs_ok_op}/{pdvs_total_op} PDVs)")
+        print(f"  ✅ Tasks Cerveja: {pct_op}% operação ({pdvs_ok_op}/{pdvs_total_op} PDVs)")
         return df_resumo
 
     except Exception as e:
