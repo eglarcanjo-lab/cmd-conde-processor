@@ -2824,12 +2824,15 @@ def processar_scanntech(conteudo_bytes):
         df_det.columns = ["cod_pdv","nome_pdv","setor","gv","dia_visita","status_scanntech","is_ativo"]
         df_det["is_ativo"] = df_det["is_ativo"].map({True:"SIM", False:"NÃO"})
         df_det["mes_referencia"] = mes_ref
+        # Remover linhas com GV vazio/nulo/nan
+        df_det = df_det[df_det["gv"].astype(str).str.strip().str.lower().isin(["", "nan", "none"]) == False]
         sobrescrever_aba("spo_scanntech_detalhe", df_det)
 
         # ── Resumo por GV ─────────────────────────────────────────────────────
-        # Como não temos setor RN diretamente, agrupamos por GV
+        # Filtrar GVs válidos (sem nan/vazio) antes de agrupar
+        gvs_validos = [g for g in df["_gv"].unique() if str(g).strip().lower() not in ("nan", "none", "")]
         resumo = []
-        for gv in sorted(df["_gv"].unique()):
+        for gv in sorted(gvs_validos):
             grp = df[df["_gv"] == gv]
             total  = len(grp)
             ativos = int(grp["_ativo"].sum())
