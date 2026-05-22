@@ -2106,8 +2106,21 @@ def calcular_tarefas_match():
         ].copy()
         print(f"  Tasks MATCH encontradas: {len(df)}")
         if df.empty:
-            print(f"  ⚠️ Categoria únicos: {df_tasks['categoria'].astype(str).str.strip().unique()[:8].tolist()}")
-            return pd.DataFrame()
+            # Log detalhado para diagnóstico
+            cats_no_cluster = df_tasks[df_tasks["cluster_primario"].astype(str).str.strip().str.lower() == CLUSTER]["categoria"].astype(str).str.strip().unique()
+            print(f"  ⚠️ Categorias no cluster '{CLUSTER}': {cats_no_cluster.tolist()}")
+            # Tentar busca parcial (contém "match")
+            df_parcial = df_tasks[
+                (df_tasks["cluster_primario"].astype(str).str.strip().str.lower() == CLUSTER) &
+                (df_tasks["categoria"].astype(str).str.strip().str.lower().str.contains("match", na=False))
+            ].copy()
+            print(f"  ⚠️ Tasks com 'match' parcial: {len(df_parcial)}")
+            if not df_parcial.empty:
+                print(f"  ⚠️ Valores únicos de categoria contendo match: {df_parcial['categoria'].unique().tolist()}")
+                df = df_parcial  # usar busca parcial como fallback
+            else:
+                print(f"  ⚠️ Todas categorias únicas no arquivo: {df_tasks['categoria'].astype(str).str.strip().unique()[:15].tolist()}")
+                return pd.DataFrame()
         df["_setor"]  = df["setor"].astype(str).str.strip()
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
         mes_ref = date.today().strftime("%Y-%m")
@@ -2253,6 +2266,18 @@ def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_n
     if cesta:
         mask &= df_tasks["categoria"].astype(str).str.strip().str.lower() == cesta
     df = df_tasks[mask].copy()
+
+    if df.empty and cesta:
+        # Fallback: busca parcial na categoria (ex: "match" dentro de "portfolio match")
+        mask_parcial = df_tasks["cluster_primario"].astype(str).str.strip().str.lower() == cluster
+        mask_parcial &= df_tasks["categoria"].astype(str).str.strip().str.lower().str.contains(cesta, na=False)
+        df = df_tasks[mask_parcial].copy()
+        if not df.empty:
+            print(f"  [{status_nome}] busca parcial '{cesta}' → {len(df)} tasks | categorias: {df['categoria'].unique().tolist()}")
+        else:
+            cats = df_tasks[df_tasks["cluster_primario"].astype(str).str.strip().str.lower() == cluster]["categoria"].astype(str).str.strip().unique().tolist()
+            print(f"  [{status_nome}] ⚠️ 0 tasks — categorias no cluster '{cluster}': {cats[:10]}")
+            return
 
     if filtro_texto:
         mask_txt = df["descricao"].astype(str).str.contains(filtro_texto, case=False, regex=True, na=False)
