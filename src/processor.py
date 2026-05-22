@@ -2419,32 +2419,63 @@ def processar_pedido_alone(conteudo_bytes):
         df_s = df[df["setor"].isin(SETORES_LOCAL)]
         print(f"  PDVs nos setores locais: {len(df_s)} | Alone: {int(df_s['_alone'].sum())}")
 
-        # Detalhe
+        # Detalhe — inclui SKU mais comprado por PDV alone
         df_det = df_s[["cod_pdv_norm","nome_pdv","setor","dia_visita","_pedidos_total","_pedidos_alone","_alone"]].copy()
         df_det.columns = ["cod_pdv","nome_pdv","setor","dia_visita","pedidos_total","pedidos_alone","is_alone"]
         df_det["is_alone"] = df_det["is_alone"].map({True: "SIM", False: "NÃO"})
         df_det["mes_referencia"] = mes_ref
+        # SKU mais comprado: tenta coluna "Produto Mais Comprado" ou similar
+        sku_cols = [c for c in df_s.columns if any(k in c.lower() for k in ["produto","sku","item","descri"])]
+        if sku_cols:
+            df_det["sku_top"] = df_s[sku_cols[0]].fillna("").astype(str).values
+        else:
+            df_det["sku_top"] = ""
         sobrescrever_aba("spo_pedido_alone_detalhe", df_det)
 
-        # Resumo por setor
+        # Resumo por setor — meta individual por RN com folga 5%
+        # Meta operação dividida proporcionalmente por PDVs de cada setor, depois +5% de folga
         resumo = []
-        for setor in sorted(df_s["setor"].unique()):
+        setores_validos = sorted([s for s in df_s["setor"].unique() if s in SETORES_LOCAL])
+        total_pdvs_op = len(df_s)
+        for setor in setores_validos:
             grp = df_s[df_s["setor"] == setor]
-            alone = int(grp["_alone"].sum())
-            total = len(grp)
-            resumo.append({"setor": setor, "pdvs_alone": alone, "pdvs_total": total, "mes_referencia": mes_ref})
-            print(f"  Setor {setor}: {alone}/{total} PDVs alone")
+            alone_s = int(grp["_alone"].sum())
+            total_s = len(grp)
+            # Meta proporcional com folga 5% (arredondado para cima)
+            if total_pdvs_op > 0 and meta_op > 0:
+                meta_s = int((total_s / total_pdvs_op) * meta_op * 1.05) + 1
+            else:
+                meta_s = 0
+            pct_s = round(alone_s / meta_s * 100, 1) if meta_s > 0 else 0
+            resumo.append({
+                "setor":        setor,
+                "pdvs_alone":   alone_s,
+                "pdvs_total":   total_s,
+                "meta":         meta_s,
+                "pct":          pct_s,
+                "ok":           "OK" if alone_s >= meta_s else "NOK",
+                "mes_referencia": mes_ref,
+            })
+            print(f"  Setor {setor}: {alone_s}/{total_s} PDVs alone | meta {meta_s} ({pct_s}%)")
 
         alone_op = int(df_s["_alone"].sum())
         total_op = len(df_s)
-        resumo.append({"setor": "OPERACAO", "pdvs_alone": alone_op, "pdvs_total": total_op,
-                       "meta": meta_op, "ok": "OK" if alone_op >= meta_op else "NOK", "mes_referencia": mes_ref})
+        pct_op   = round(alone_op / meta_op * 100, 1) if meta_op > 0 else 0
+        resumo.append({
+            "setor":        "OPERACAO",
+            "pdvs_alone":   alone_op,
+            "pdvs_total":   total_op,
+            "meta":         meta_op,
+            "pct":          pct_op,
+            "ok":           "OK" if alone_op >= meta_op else "NOK",
+            "mes_referencia": mes_ref,
+        })
 
         df_resumo = pd.DataFrame(resumo)
         sobrescrever_aba("spo_pedido_alone_resumo", df_resumo)
         atualizar_status_arquivo("SPO - Pedido Alone", "✅ OK",
-                                 f"Operação: {alone_op} PDVs alone (meta: {meta_op})")
-        print(f"  ✅ Pedido Alone: {alone_op} PDVs alone / meta {meta_op}")
+                                 f"Operação: {alone_op}/{meta_op} PDVs alone ({pct_op}%)")
+        print(f"  ✅ Pedido Alone: {alone_op}/{meta_op} PDVs alone ({pct_op}%)")
         return df_resumo
 
     except Exception as e:
