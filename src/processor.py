@@ -1177,13 +1177,25 @@ def processar_visitacao_gv(conteudo_bytes):
     df_out.columns = ["gv", "setor", "cod_pdv", "nome_pdv", "dia_visita", "visita_ok", "gps_ok", "valida", "mes_referencia"]
     df_out["valida"] = df_out["valida"].map({True: "SIM", False: "NÃO"})
 
+    # Filtrar linhas com GV vazio/invalido antes de gravar e resumir
+    gvs_invalidos_mask = df_out["gv"].astype(str).str.strip().isin(["", "nan", "None", "NaN"])
+    n_invalidos = gvs_invalidos_mask.sum()
+    if n_invalidos > 0:
+        print(f"  ⚠️ {n_invalidos} linhas com GV vazio/invalido ignoradas: {df_out[gvs_invalidos_mask]['cod_pdv'].tolist()[:10]}")
+    df_out = df_out[~gvs_invalidos_mask].copy()
+
     sobrescrever_aba("spo_visitacao_gv", df_out)
 
-    # Resumo por GV
+    # Resumo por GV — apenas GVs validos (ex: "1", "3")
     resumo = []
-    for gv in df_out["gv"].unique():
+    gvs_validos = sorted([g for g in df_out["gv"].unique() if str(g).strip() not in ("", "nan", "None", "NaN")])
+    print(f"  GVs encontrados no arquivo: {gvs_validos}")
+    for gv in gvs_validos:
         df_gv = df_out[df_out["gv"] == gv]
         visitados = df_gv[df_gv["valida"] == "SIM"]["cod_pdv"].nunique()
+        total_linhas = len(df_gv)
+        n_validas = (df_gv["valida"] == "SIM").sum()
+        print(f"  GV {gv}: {total_linhas} linhas, {n_validas} validas, {visitados} PDVs unicos validos")
         pct = round((visitados / META_VISITACAO_GV) * 100, 1)
         resumo.append({
             "gv": gv,
