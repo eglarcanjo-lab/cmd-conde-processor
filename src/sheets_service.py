@@ -67,12 +67,16 @@ def _com_retry(fn, max_tentativas=5, espera_inicial=10):
 
 
 def ler_aba(nome_aba):
-    """Lê uma aba e retorna DataFrame, com retry em caso de quota exceeded."""
+    """Lê uma aba e retorna DataFrame, com retry em caso de quota exceeded.
+    Usa UNFORMATTED_VALUE para receber números como floats Python (sem formatação
+    de locale), evitando que "73,235" (locale BR) seja retornado como string
+    em vez do número 73.235.
+    """
     def _ler():
         sh = get_sheet()
         try:
             ws = sh.worksheet(nome_aba)
-            data = ws.get_all_records()
+            data = ws.get_all_records(value_render_option="UNFORMATTED_VALUE")
             return pd.DataFrame(data)
         except gspread.exceptions.WorksheetNotFound:
             return pd.DataFrame()
