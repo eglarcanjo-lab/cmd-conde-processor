@@ -1023,6 +1023,27 @@ def processar_pontos_bees(conteudo_bytes):
     return resultado
 
 
+def _normalizar_cat_rv(cat_raw):
+    """
+    Normaliza o nome da categoria salvo em 'metas' para a chave interna de RV.
+    Remove o sufixo entre parênteses e aplica mapeamentos especiais.
+
+    Exemplos:
+      "CERVEJA (VOLUME)"        → "CERVEJA"
+      "NAB (VOLUME)"            → "NAB"
+      "MATCH (VOLUME)"          → "MATCH"
+      "MARKETPLACE (FATURAMENTO)" → "MARKETPLACE"
+      "PONTOS FORCE"            → "PONTOS BEES"
+      "BALANCED CHOICE (VOLUME)"→ "BALANCED CHOICE"
+      "PO_TOTAL"                → "PO_TOTAL"
+    """
+    cat = str(cat_raw).strip().upper()
+    if "(" in cat:
+        cat = cat[:cat.index("(")].strip()
+    _MAP = {"PONTOS FORCE": "PONTOS BEES"}
+    return _MAP.get(cat, cat)
+
+
 def calcular_rv_completa():
     """
     Calcula a RV completa para todos os RNs com base nos dados já processados.
@@ -1043,9 +1064,12 @@ def calcular_rv_completa():
     po_total_map = {}
     for _, row in df_metas.iterrows():
         setor = str(row.get("setor", "")).strip()
-        cat   = str(row.get("categoria", "")).strip().upper()
+        # Normaliza categoria: "CERVEJA (VOLUME)" → "CERVEJA", "PONTOS FORCE" → "PONTOS BEES"
+        cat   = _normalizar_cat_rv(row.get("categoria", ""))
         meta  = pd.to_numeric(str(row.get("meta_volume", "0")).replace(",","."), errors="coerce") or 0
-        peso  = pd.to_numeric(str(row.get("peso", "0")).replace(",","."), errors="coerce") or 0
+        # Normaliza peso: aceita decimal (0.25) ou inteiro (25) — converte tudo para % inteira
+        peso_raw = pd.to_numeric(str(row.get("peso", "0")).replace(",","."), errors="coerce") or 0
+        peso = round(peso_raw * 100, 4) if 0 < peso_raw < 1 else peso_raw
         if setor not in metas_map:
             metas_map[setor] = {}
         metas_map[setor][cat] = {"meta": meta, "peso": peso}
