@@ -1142,7 +1142,7 @@ def calcular_rv_completa():
     for setor in todos_setores:
         segmento = "OFF" if setor in SEGMENTO_OFF else "ON"
         ap_ok = ap_map.get(setor, "NOK")
-        po_total = po_total_map.get(setor, 1500.0)
+        po_total = po_total_map.get(setor, 1000.0)
 
         # Pontos Bees (50% do PO)
         pontos_real = pontos_map.get(setor, 0)
