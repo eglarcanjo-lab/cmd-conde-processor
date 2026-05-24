@@ -220,6 +220,9 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     # ── Rank clientes ─────────────────────────────────────────────────────────
     _processar_rank(df_4m)
 
+    # ── Volume RV (mês atual — para cálculo de remuneração) ───────────────────
+    processar_volume_rv(df_mes_atual, date.today().strftime("%Y-%m"))
+
     # ── Faltas ────────────────────────────────────────────────────────────────
     _processar_faltas(df)
 
@@ -704,8 +707,18 @@ def processar_volume_rv(df_pedidos, mes_ref):
     """
     print("📊 Gerando volume RV...")
     
-    cats_rv = ["CERVEJA", "NAB", "MATCH", "GIRO RGB", "HE"]
-    
+    cats_rv = {
+        # Cerveja (todas as variantes)
+        "CERVEJA", "CERVEJA ZERO", "CERVEJA MULTIPACK",
+        "GIRO RGB", "HE", "HE RGB",
+        "TRIMARCA RGB HE (Original)", "TRIMARCA RGB HE (Stella)", "TRIMARCA RGB HE (Spaten)",
+        "BALANCED CHOICE", "LITRINHO",
+        # NAB (todas as variantes)
+        "NAB", "NAB ZERO",
+        # Match (OFF)
+        "MATCH",
+    }
+
     linhas = []
     for _, row in df_pedidos[df_pedidos["_volume"] > 0].iterrows():
         cats = row.get("_categorias") or []
@@ -932,16 +945,18 @@ def processar_faturamento_mktp(conteudo_bytes):
     df["_total_venda"] = pd.to_numeric(df["_total_venda"], errors="coerce").fillna(0)
 
     # Carrega mapa de categorias para filtrar só Mktp
+    # Normaliza zeros nos dois lados para garantir matching independente do formato
     df_prods = ler_aba("produtos_base")
     mapa_cat = {}
     if not df_prods.empty and "cod" in df_prods.columns:
         for _, row in df_prods.iterrows():
-            cod = str(row.get("cod", "")).strip()
+            cod = str(row.get("cod", "")).strip().lstrip("0") or "0"
             cats = str(row.get("categorias", "")).strip()
             if cod and "MKTP" in cats.upper():
                 mapa_cat[cod] = "MKTP"
 
     df["_cod_prod"] = df["Cod.Produto"].str.strip().str.lstrip("0")
+    df["_cod_prod"] = df["_cod_prod"].where(df["_cod_prod"] != "", "0")
     df["_categoria"] = df["_cod_prod"].map(mapa_cat)
     df_mktp = df[df["_categoria"] == "MKTP"].copy()
 
@@ -1044,13 +1059,28 @@ def calcular_rv_completa():
     for _, row in df_ap.iterrows():
         ap_map[str(row.get("setor","")).strip()] = str(row.get("ap_ok","NOK")).strip().upper()
 
-    # Volume por setor (dos pedidos - últimos dados disponíveis)
+    # Volume real por setor/categoria (gerado por processar_pedidos → rv_volume)
+    df_vol = ler_aba("rv_volume")
     vol_map = {}
-    for _, row in df_cobertura.iterrows():
-        setor = str(row.get("setor","")).strip()
-        cat   = str(row.get("categoria","")).strip().upper()
-        # Conta PDVs OK como proxy de volume — volume real vem dos pedidos
-        pass
+    CERVEJA_CATS = {
+        "CERVEJA", "CERVEJA ZERO", "CERVEJA MULTIPACK",
+        "GIRO RGB", "HE", "HE RGB",
+        "TRIMARCA RGB HE (ORIGINAL)", "TRIMARCA RGB HE (STELLA)", "TRIMARCA RGB HE (SPATEN)",
+        "BALANCED CHOICE", "LITRINHO",
+    }
+    NAB_CATS = {"NAB", "NAB ZERO"}
+    for _, row in df_vol.iterrows():
+        setor = str(row.get("setor", "")).strip()
+        cat   = str(row.get("categoria", "")).strip().upper()
+        vol   = float(row.get("volume", 0) or 0)
+        if setor not in vol_map:
+            vol_map[setor] = {"CERVEJA": 0.0, "NAB": 0.0, "MATCH": 0.0}
+        if cat in CERVEJA_CATS:
+            vol_map[setor]["CERVEJA"] = round(vol_map[setor]["CERVEJA"] + vol, 3)
+        elif cat in NAB_CATS:
+            vol_map[setor]["NAB"] = round(vol_map[setor]["NAB"] + vol, 3)
+        elif cat == "MATCH":
+            vol_map[setor]["MATCH"] = round(vol_map[setor]["MATCH"] + vol, 3)
 
     # Calcula por setor
     resultados = []
@@ -1086,6 +1116,12 @@ def calcular_rv_completa():
             peso_var  = metas_map.get(setor, {}).get("MARKETPLACE", {}).get("peso", 0)
             var_label = "MARKETPLACE"
 
+        real_cerv = round(vol_map.get(setor, {}).get("CERVEJA", 0.0), 3)
+        real_nab  = round(vol_map.get(setor, {}).get("NAB", 0.0), 3)
+        real_var  = (round(mktp_map.get(setor, 0.0), 2)
+                     if segmento == "ON"
+                     else round(vol_map.get(setor, {}).get("MATCH", 0.0), 3))
+
         resultados.append({
             "setor":          setor,
             "segmento":       segmento,
@@ -1096,10 +1132,13 @@ def calcular_rv_completa():
             "pct_pontos":     round(pct_pontos, 1),
             "peso_pontos":    peso_pontos,
             "rv_pontos":      round(rv_pontos, 2),
+            "real_cerveja":   real_cerv,
             "meta_cerveja":   meta_cerv,
             "peso_cerveja":   peso_cerv,
+            "real_nab":       real_nab,
             "meta_nab":       meta_nab,
             "peso_nab":       peso_nab,
+            f"real_{var_label.lower()}": real_var,
             f"meta_{var_label.lower()}": meta_var,
             f"peso_{var_label.lower()}": peso_var,
             "indicador_variavel": var_label,
@@ -3175,6 +3214,27 @@ def processar_atendimento_produtivo(conteudo_bytes):
 
         df_detalhe = pd.DataFrame(df_det)
         sobrescrever_aba("spo_ap_detalhe", df_detalhe)
+
+        # ── rv_ap — popula aba usada pelo cálculo de RV ───────────────────────
+        rv_ap_rows = []
+        for _, row in df.iterrows():
+            ap_ok_val = "OK" if str(row.get("AP OK", "")).strip().upper() == "SIM" else "NOK"
+            rv_ap_rows.append({
+                "setor":               row["setor"],
+                "mes_referencia":      mes_ref,
+                "tasks_compra_real":   pct(row.get("Real", "")),
+                "tasks_compra_meta":   pct(row.get("Meta", "")),
+                "compradores_real":    str(row.get("Real.1", "")).strip(),
+                "compradores_meta":    str(row.get("Meta.1", "")).strip(),
+                "rota_efetiva_real":   pct(row.get("Real.3", "")),
+                "rota_efetiva_meta":   pct(row.get("Meta.3", "")),
+                "gps_real":            pct(row.get("Real.2", "")),
+                "gps_meta":            pct(row.get("Meta.2", "")),
+                "ap_ok":               ap_ok_val,
+            })
+        df_rv_ap = pd.DataFrame(rv_ap_rows)
+        sobrescrever_aba("rv_ap", df_rv_ap)
+        print(f"  ✅ rv_ap atualizada: {len(df_rv_ap)} setores")
 
         # ── Resumo por GV e operação ──────────────────────────────────────────
         total_op = len(df)
