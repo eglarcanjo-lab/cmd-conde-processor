@@ -94,19 +94,32 @@ def resolver_categoria(cod_prod, cat_bruta, desc_produto, cod_marca_str):
     return MAPA_CATEGORIA_BRUTA.get(cat, None)
 
 
+def _normalizar_cod(cod_raw):
+    """
+    Normaliza código de produto: remove zeros à esquerda.
+    '0027866' → '27866'  |  '027866' → '27866'  |  '0' ou '' → '0'
+    Garante lookup consistente entre pedidos (com zeros) e Sheets (sem zeros).
+    """
+    s = str(cod_raw).strip().lstrip("0")
+    return s if s else "0"
+
+
 def carregar_base_produtos(df_base):
     """
     Carrega a base de produtos do Sheets (aba produtos_base).
-    Retorna dict {cod_prod: [lista_de_categorias]}
+    Retorna dict {cod_prod_normalizado: [lista_de_categorias]}
     Suporta múltiplas categorias separadas por | (pipe).
     Aceita coluna 'categorias' ou 'categoria'.
     """
     mapa = {}
     for _, row in df_base.iterrows():
-        cod = str(row.get("cod", "")).strip()
+        # Normaliza o código para remover zeros à esquerda
+        cod = _normalizar_cod(row.get("cod", ""))
+        if cod == "0":
+            continue
         # Aceita tanto 'categorias' quanto 'categoria'
         cats_raw = str(row.get("categorias", row.get("categoria", ""))).strip()
-        if not cod or not cats_raw or cats_raw in ("0", "#N/D", "", "nan", "None"):
+        if not cats_raw or cats_raw in ("0", "#N/D", "", "nan", "None"):
             continue
         # Suporta múltiplas categorias separadas por |
         cats = [c.strip() for c in cats_raw.split("|") if c.strip()]

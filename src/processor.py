@@ -184,7 +184,8 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     # Resolver categoria de cada linha
     def get_cats(row):
         """Retorna lista de categorias — SOMENTE da produtos_base cadastrada pelo admin."""
-        cod = str(row.get("Cod. Prod.", "")).strip()
+        cod_raw = str(row.get("Cod. Prod.", "")).strip()
+        cod = cod_raw.lstrip("0") or "0"  # normaliza zeros à esquerda para bater com produtos_base
         cats_sheet = mapa_produtos.get(cod)
         if cats_sheet and isinstance(cats_sheet, list):
             return cats_sheet
@@ -350,7 +351,8 @@ def _processar_devolucoes(df):
 
 def _registrar_sem_categoria(df, mapa_produtos):
     """Registra produtos que apareceram nos pedidos mas não têm categoria."""
-    df["_cod_str"] = df["Cod. Prod."].str.strip()
+    # Normaliza código: remove zeros à esquerda para bater com produtos_base
+    df["_cod_str"] = df["Cod. Prod."].str.strip().str.lstrip("0").replace("", "0")
 
     # PRESERVA categorias da produtos_base — apenas adiciona produtos novos
     try:
@@ -358,8 +360,8 @@ def _registrar_sem_categoria(df, mapa_produtos):
         mapa_base = {}  # {cod: {nome, categorias}}
         if not df_base_atual.empty and "cod" in df_base_atual.columns:
             for _, row in df_base_atual.iterrows():
-                cod = str(row.get("cod","")).strip()
-                if cod:
+                cod = str(row.get("cod","")).strip().lstrip("0") or "0"
+                if cod and cod != "0":
                     mapa_base[cod] = {
                         "nome": str(row.get("nome","")).strip(),
                         "categorias": str(row.get("categorias","")).strip(),
@@ -947,17 +949,18 @@ def processar_faturamento_mktp(conteudo_bytes):
     df["_total_venda"] = pd.to_numeric(df["_total_venda"], errors="coerce").fillna(0)
 
     # Carrega mapa de categorias para filtrar apenas produtos MKTP
-    # Usa o mesmo formato do código que está em produtos_base (sem normalizar zeros)
+    # Normaliza zeros à esquerda em ambos os lados para garantir match consistente
     df_prods = ler_aba("produtos_base")
     mapa_mktp = set()
     if not df_prods.empty and "cod" in df_prods.columns:
         for _, row in df_prods.iterrows():
-            cod  = str(row.get("cod", "")).strip()
+            cod  = (str(row.get("cod", "")).strip().lstrip("0") or "0")
             cats = str(row.get("categorias", "")).strip().upper()
-            if cod and "MKTP" in cats:
+            if cod and cod != "0" and "MKTP" in cats:
                 mapa_mktp.add(cod)
 
-    df["_cod_prod"] = df["Cod.Produto"].str.strip()
+    # Normaliza código do pedido também (remove zeros à esquerda)
+    df["_cod_prod"] = df["Cod.Produto"].str.strip().str.lstrip("0").replace("", "0")
 
     if mapa_mktp:
         # Filtra apenas produtos MKTP cadastrados
