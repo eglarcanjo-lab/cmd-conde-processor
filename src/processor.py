@@ -924,20 +924,20 @@ SEGMENTO_ON  = {"104", "105", "106", "301", "302", "303", "304", "305"}  # Mktp 
 def processar_faturamento_mktp(conteudo_bytes):
     """
     Processa o arquivo 030509 (GMV Marketplace por setor).
-    O relatório 030509 já representa apenas vendas Marketplace —
-    não há filtro por categoria de produto.
-    Colunas usadas: Vendedor (setor, col N) e Total Venda (col G).
+    Filtra apenas produtos com categoria MKTP em produtos_base.
+    Se produtos_base não tiver produtos MKTP cadastrados, soma TUDO (fallback).
+    Colunas usadas: Vendedor (setor, col N), Cod.Produto (col C), Total Venda (col G).
     Ignora linhas onde Vendedor não é um setor válido (ex.: "0").
     """
     print("📂 Processando faturamento Mktp (030509)...")
     df = ler_csv_inf(conteudo_bytes)
     df.columns = [c.strip() for c in df.columns]
 
-    # Normaliza setor pelo campo Vendedor; ignora linhas com setor "0" ou inválido
+    # Normaliza setor pelo campo Vendedor; ignora setores inválidos (ex: "0")
     df["_setor"] = df["Vendedor"].apply(normalizar_setor)
     df = df[df["_setor"].isin(SETORES_VALIDOS)]
 
-    # Normaliza Total Venda (formato: "00000000163,16" com separador pt-BR)
+    # Normaliza Total Venda (formato Promax: "00000000163,16" → 163.16)
     df["_total_venda"] = (
         df["Total Venda"]
         .str.replace(".", "", regex=False)
@@ -946,9 +946,31 @@ def processar_faturamento_mktp(conteudo_bytes):
     )
     df["_total_venda"] = pd.to_numeric(df["_total_venda"], errors="coerce").fillna(0)
 
-    # Agrega Total Venda por setor — sem filtro de categoria (todo o 030509 é Mktp)
+    # Carrega mapa de categorias para filtrar apenas produtos MKTP
+    # Usa o mesmo formato do código que está em produtos_base (sem normalizar zeros)
+    df_prods = ler_aba("produtos_base")
+    mapa_mktp = set()
+    if not df_prods.empty and "cod" in df_prods.columns:
+        for _, row in df_prods.iterrows():
+            cod  = str(row.get("cod", "")).strip()
+            cats = str(row.get("categorias", "")).strip().upper()
+            if cod and "MKTP" in cats:
+                mapa_mktp.add(cod)
+
+    df["_cod_prod"] = df["Cod.Produto"].str.strip()
+
+    if mapa_mktp:
+        # Filtra apenas produtos MKTP cadastrados
+        df_filtrado = df[df["_cod_prod"].isin(mapa_mktp)].copy()
+        print(f"  🔍 Filtro MKTP: {len(df_filtrado)} linhas de {len(df)} (produtos: {len(mapa_mktp)} MKTP cadastrados)")
+    else:
+        # Sem produtos MKTP em produtos_base — usa todas as linhas como fallback
+        df_filtrado = df.copy()
+        print("  ⚠️ Nenhum produto MKTP em produtos_base — somando todos os produtos do 030509")
+
+    # Agrega Total Venda por setor
     resultado = (
-        df.groupby("_setor")["_total_venda"]
+        df_filtrado.groupby("_setor")["_total_venda"]
         .sum()
         .reset_index()
         .rename(columns={"_setor": "setor", "_total_venda": "faturamento_mktp_real"})

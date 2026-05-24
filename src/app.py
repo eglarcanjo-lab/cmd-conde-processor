@@ -68,9 +68,14 @@ def upload_pedidos():
         # Tenta carregar base de clientes já processada
         df_clientes = ler_aba("pdv_base")
         processar_pedidos(conteudo, df_clientes if not df_clientes.empty else None)
+        # Recalcula RV automaticamente após atualizar volumes
+        try:
+            calcular_rv_completa()
+        except Exception as e_rv:
+            print(f"  ⚠️ Auto-recalc RV após pedidos: {e_rv}")
         return jsonify({
             "success": True,
-            "message": "Pedidos processados com sucesso.",
+            "message": "Pedidos processados e RV recalculada.",
         })
     except Exception as e:
         traceback.print_exc()
@@ -252,6 +257,16 @@ def upload_ambos():
             traceback.print_exc()
             resultados["pedidos"] = f"❌ Erro: {str(e)[:100]}"
 
+    # Recalcula RV ao final se algum dado RV foi atualizado neste lote
+    rv_keys = {"pedidos", "faturamento_mktp", "pontos_bees", "spo_ap"}
+    if rv_keys & set(arquivos.keys()):
+        try:
+            calcular_rv_completa()
+            resultados["rv_recalculada"] = "✅ RV recalculada automaticamente"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["rv_recalculada"] = f"⚠️ RV não recalculada: {str(e)[:100]}"
+
     return jsonify({"success": True, "resultados": resultados})
 
 
@@ -328,7 +343,12 @@ def upload_faturamento_mktp():
     if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
     try:
         df = processar_faturamento_mktp(request.files["arquivo"].read())
-        return jsonify({"success": True, "message": f"Faturamento Mktp: {len(df)} setores."})
+        # Recalcula RV automaticamente após atualizar faturamento Mktp
+        try:
+            calcular_rv_completa()
+        except Exception as e_rv:
+            print(f"  ⚠️ Auto-recalc RV após faturamento_mktp: {e_rv}")
+        return jsonify({"success": True, "message": f"Faturamento Mktp: {len(df)} setores. RV recalculada."})
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("030509 (Faturamento Mktp)", "❌ ERRO", str(e)[:200])
@@ -341,7 +361,12 @@ def upload_pontos_bees():
     if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
     try:
         df = processar_pontos_bees(request.files["arquivo"].read())
-        return jsonify({"success": True, "message": f"Pontos Bees: {len(df)} setores."})
+        # Recalcula RV automaticamente após atualizar pontos
+        try:
+            calcular_rv_completa()
+        except Exception as e_rv:
+            print(f"  ⚠️ Auto-recalc RV após pontos_bees: {e_rv}")
+        return jsonify({"success": True, "message": f"Pontos Bees: {len(df)} setores. RV recalculada."})
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("Pontos Bees (BI)", "❌ ERRO", str(e)[:200])
@@ -603,7 +628,12 @@ def upload_spo_ap():
     if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
     try:
         df = processar_atendimento_produtivo(request.files["arquivo"].read())
-        return jsonify({"success": True, "message": f"Atendimento Produtivo: {len(df)} linhas."})
+        # Recalcula RV automaticamente (AP é gate de pagamento)
+        try:
+            calcular_rv_completa()
+        except Exception as e_rv:
+            print(f"  ⚠️ Auto-recalc RV após spo_ap: {e_rv}")
+        return jsonify({"success": True, "message": f"Atendimento Produtivo: {len(df)} linhas. RV recalculada."})
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("SPO - Atendimento Produtivo", "❌ ERRO", str(e)[:200])
