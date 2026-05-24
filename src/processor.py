@@ -357,7 +357,7 @@ def _registrar_sem_categoria(df, mapa_produtos):
     # PRESERVA categorias da produtos_base — apenas adiciona produtos novos
     try:
         df_base_atual = ler_aba("produtos_base")
-        mapa_base = {}  # {cod: {nome, categorias}}
+        mapa_base = {}  # {cod: {nome, categorias, atualizado_em}}
         if not df_base_atual.empty and "cod" in df_base_atual.columns:
             for _, row in df_base_atual.iterrows():
                 cod = str(row.get("cod","")).strip().lstrip("0") or "0"
@@ -365,6 +365,7 @@ def _registrar_sem_categoria(df, mapa_produtos):
                     mapa_base[cod] = {
                         "nome": str(row.get("nome","")).strip(),
                         "categorias": str(row.get("categorias","")).strip(),
+                        "atualizado_em": str(row.get("atualizado_em","")).strip(),
                     }
     except Exception:
         mapa_base = {}
@@ -400,6 +401,19 @@ def _registrar_sem_categoria(df, mapa_produtos):
             "categorias": categorias,
             "atualizado_em": date.today().strftime("%d/%m/%Y"),
         })
+
+    # Preserva produtos da base existente que NÃO apareceram nos pedidos atuais.
+    # Crítico para produtos MKTP/especiais cadastrados manualmente que não transitam
+    # pelo arquivo de pedidos (030506) — sem isso eles são apagados a cada reimportação.
+    cods_processados = {l["cod"] for l in linhas_base}
+    for cod, dados in mapa_base.items():
+        if cod not in cods_processados:
+            linhas_base.append({
+                "cod": cod,
+                "nome": dados.get("nome", ""),
+                "categorias": dados.get("categorias", ""),
+                "atualizado_em": dados.get("atualizado_em", ""),
+            })
 
     df_base_nova = pd.DataFrame(linhas_base)
     sobrescrever_aba("produtos_base", df_base_nova)
@@ -966,10 +980,14 @@ def processar_faturamento_mktp(conteudo_bytes):
         # Filtra apenas produtos MKTP cadastrados
         df_filtrado = df[df["_cod_prod"].isin(mapa_mktp)].copy()
         print(f"  🔍 Filtro MKTP: {len(df_filtrado)} linhas de {len(df)} (produtos: {len(mapa_mktp)} MKTP cadastrados)")
+    elif "Tipo Marca" in df.columns:
+        # Fallback confiável: Tipo Marca = 86 identifica produtos Marketplace no sistema
+        df_filtrado = df[df["Tipo Marca"].str.strip() == "86"].copy()
+        print(f"  ⚠️ Sem MKTP em produtos_base — fallback Tipo Marca=86: {len(df_filtrado)} linhas de {len(df)}")
     else:
-        # Sem produtos MKTP em produtos_base — usa todas as linhas como fallback
+        # Último recurso: nenhum filtro disponível
         df_filtrado = df.copy()
-        print("  ⚠️ Nenhum produto MKTP em produtos_base — somando todos os produtos do 030509")
+        print("  ⚠️ Nenhum filtro MKTP disponível — somando todos os produtos do 030509")
 
     # Agrega Total Venda por setor
     resultado = (
