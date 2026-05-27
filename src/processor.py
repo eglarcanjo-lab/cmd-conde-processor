@@ -456,10 +456,29 @@ def processar_inadimplencia(conteudo_bytes):
     print(f"  Colunas encontradas: {list(df.columns)}")
     print(f"  Total de linhas brutas: {len(df)}")
 
-    # Detecta coluna de setor/vendedor (flexível)
-    col_setor = next((c for c in df.columns if c.lower() in ["vendedor", "setor", "vende"]), None)
+    # Auto-detecta coluna de setor: procura qual coluna tem valores em SETORES_VALIDOS
+    col_setor = None
+    candidatos_setor = ["Superv", "Vendedor", "GDD", "UNB", "Setor", "setor", "RN"]
+    # 1) tenta nomes conhecidos primeiro
+    for c in candidatos_setor:
+        if c in df.columns:
+            hits = df[c].apply(normalizar_setor).isin(SETORES_VALIDOS).sum()
+            if hits > 0:
+                col_setor = c
+                print(f"  Coluna de setor detectada: '{c}' ({hits} linhas válidas)")
+                break
+    # 2) se não achou, varre todas as colunas
     if col_setor is None:
-        raise ValueError(f"Coluna de setor não encontrada. Colunas disponíveis: {list(df.columns)}")
+        for c in df.columns:
+            if not c or c.startswith("Unnamed"):
+                continue
+            hits = df[c].apply(normalizar_setor).isin(SETORES_VALIDOS).sum()
+            if hits > 0:
+                col_setor = c
+                print(f"  Coluna de setor detectada (varredura): '{c}' ({hits} linhas válidas)")
+                break
+    if col_setor is None:
+        raise ValueError(f"Nenhuma coluna com setores válidos encontrada. Colunas: {list(df.columns)}")
 
     # Detecta coluna de cliente/PDV
     col_cliente = next((c for c in df.columns if c.lower() in ["cliente", "cod_pdv", "codcliente"]), None)
@@ -472,14 +491,16 @@ def processar_inadimplencia(conteudo_bytes):
         raise ValueError(f"Coluna de nome não encontrada. Colunas disponíveis: {list(df.columns)}")
 
     # Detecta coluna de dias
-    col_dias = next((c for c in df.columns if c.lower() in ["dias", "diasatraso", "dias_atraso", "dias em atraso"]), None)
+    col_dias = next((c for c in df.columns if c.lower() in ["dias", "diasatraso", "dias_atraso", "dias em atraso", "datavencto", "data vencto"]), None)
     if col_dias is None:
         raise ValueError(f"Coluna de dias não encontrada. Colunas disponíveis: {list(df.columns)}")
 
     # Detecta coluna de valor (flexível)
-    col_valor = next((c for c in df.columns if c.lower() in ["valorpendente", "valor pendente", "valor", "saldo", "vl_pendente", "vl pendente"]), None)
+    col_valor = next((c for c in df.columns if c.lower() in ["valorpendente", "valor pendente", "valorcorrigido", "valor corrigido", "valor", "saldo", "vl_pendente"]), None)
     if col_valor is None:
         raise ValueError(f"Coluna de valor não encontrada. Colunas disponíveis: {list(df.columns)}")
+
+    print(f"  Mapeamento: setor='{col_setor}', cliente='{col_cliente}', nome='{col_nome}', dias='{col_dias}', valor='{col_valor}'")
 
     # Normaliza setor
     df["_setor"] = df[col_setor].apply(normalizar_setor)
