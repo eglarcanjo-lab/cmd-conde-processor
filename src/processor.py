@@ -481,41 +481,64 @@ def processar_inadimplencia(conteudo_bytes):
     if col_setor is None:
         raise ValueError(f"Nenhuma coluna com setores válidos encontrada. Colunas: {list(df.columns)}")
 
-    # Detecta coluna de cliente/PDV (busca substring — robusto a encoding)
-    col_cliente = next((c for c in df.columns if any(k in c.lower() for k in ["cliente", "cod_pdv", "codpdv", "codcliente"])), None)
+    # ── Mapeamento de colunas — posição FIXA como fonte primária ──────────────
+    # O relatório 120601 (Promax) tem estrutura padronizada:
+    #   pos 1  → Cliente       (código do PDV)
+    #   pos 2  → Nome          (nome fantasia)
+    #   pos 9  → Vendedor      (código RN/setor: 0101→101)
+    #   pos 14 → Dias          (dias de atraso, negativo = vencido)
+    #   pos 20 → ValorCorrigido (valor corrigido com multa/juros)
+    #   pos 23 → AGING         (faixa de aging)
+    # A detecção por nome é usada apenas como validação/fallback.
+    cols = list(df.columns)
+    n_cols = len(cols)
+
+    def _by_pos_or_name(pos, keywords):
+        """Usa posição; se o nome não contiver as keywords, busca por nome."""
+        if pos < n_cols and any(k in cols[pos].lower() for k in keywords):
+            return cols[pos]
+        # Fallback: varredura por nome
+        return next((c for c in cols if any(k in c.lower() for k in keywords)), None)
+
+    col_cliente = _by_pos_or_name(1,  ["cliente", "cod_pdv", "codpdv"])
+    col_nome    = _by_pos_or_name(2,  ["nome", "razao"])
+
+    # Dias: posição 14; fallback = qualquer col com "dias" mas sem "data" (evita DataVencto)
+    col_dias = None
+    if 14 < n_cols and "dias" in cols[14].lower() and "data" not in cols[14].lower():
+        col_dias = cols[14]
+    if col_dias is None:
+        col_dias = next((c for c in cols if "dias" in c.lower() and "data" not in c.lower()), None)
+
+    # Valor: posição 20 (ValorCorrigido); fallback por substring
+    col_valor = None
+    if 20 < n_cols and "valor" in cols[20].lower():
+        col_valor = cols[20]
+    if col_valor is None:
+        _cvs = [c for c in cols if "valor" in c.lower()]
+        col_valor = (
+            next((c for c in _cvs if "corrig" in c.lower()), None) or
+            next((c for c in _cvs if "pend"   in c.lower()), None) or
+            next((c for c in _cvs if "orig"   in c.lower()), None) or
+            (next(iter(_cvs), None))
+        )
+
+    # Validações
     if col_cliente is None:
-        raise ValueError(f"Coluna de cliente não encontrada. Colunas disponíveis: {list(df.columns)}")
-
-    # Detecta coluna de nome
-    col_nome = next((c for c in df.columns if any(k in c.lower() for k in ["nome", "razao", "razão"])), None)
+        # Último recurso: usa posição 1 direto (confia na estrutura do arquivo)
+        col_cliente = cols[1] if n_cols > 1 else None
     if col_nome is None:
-        raise ValueError(f"Coluna de nome não encontrada. Colunas disponíveis: {list(df.columns)}")
-
-    # Detecta coluna de dias de atraso
-    # Prioridade 1: coluna chamada exatamente "Dias" (valores negativos = vencido)
-    # Prioridade 2: qualquer coluna com "dias" no nome mas SEM "data" (evita DataVencto)
-    col_dias = next((c for c in df.columns if c.strip().lower() == "dias"), None)
+        col_nome = cols[2] if n_cols > 2 else None
     if col_dias is None:
-        col_dias = next((c for c in df.columns if "dias" in c.lower() and "data" not in c.lower()), None)
-    if col_dias is None:
-        raise ValueError(f"Coluna de dias não encontrada. Colunas disponíveis: {list(df.columns)}")
-
-    # Detecta coluna de valor — usa substring "valor" para ser robusto a encoding
-    # Prioriza ValorCorrigido (com multa/juros) > ValorPendente > ValorOriginal
-    _cols_valor = [c for c in df.columns if "valor" in c.lower()]
-    print(f"  Colunas com 'valor' encontradas: {_cols_valor}")
-    col_valor = (
-        next((c for c in _cols_valor if "corrig" in c.lower()), None) or
-        next((c for c in _cols_valor if "pend" in c.lower()), None) or
-        next((c for c in _cols_valor if "orig" in c.lower()), None) or
-        next((c for c in _cols_valor), None)
-    )
+        col_dias = cols[14] if n_cols > 14 else None
     if col_valor is None:
-        col_valor = next((c for c in df.columns if any(k in c.lower() for k in ["saldo", "vl_pend"])), None)
-    if col_valor is None:
-        raise ValueError(f"Coluna de valor não encontrada. Colunas disponíveis: {list(df.columns)}")
+        col_valor = cols[20] if n_cols > 20 else None
 
-    print(f"  Mapeamento: setor='{col_setor}', cliente='{col_cliente}', nome='{col_nome}', dias='{col_dias}', valor='{col_valor}'")
+    for nome_col, val in [("cliente", col_cliente), ("nome", col_nome), ("dias", col_dias), ("valor", col_valor)]:
+        if val is None:
+            raise ValueError(f"Coluna '{nome_col}' não encontrada. Colunas: {list(df.columns)}")
+
+    print(f"  Mapeamento: setor='{col_setor}', cliente='{col_cliente}'(pos {cols.index(col_cliente)}), nome='{col_nome}'(pos {cols.index(col_nome)}), dias='{col_dias}'(pos {cols.index(col_dias)}), valor='{col_valor}'(pos {cols.index(col_valor)})")
 
     # Normaliza setor
     df["_setor"] = df[col_setor].apply(normalizar_setor)
