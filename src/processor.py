@@ -481,25 +481,37 @@ def processar_inadimplencia(conteudo_bytes):
     if col_setor is None:
         raise ValueError(f"Nenhuma coluna com setores válidos encontrada. Colunas: {list(df.columns)}")
 
-    # Detecta coluna de cliente/PDV
-    col_cliente = next((c for c in df.columns if c.lower() in ["cliente", "cod_pdv", "codcliente"]), None)
+    # Detecta coluna de cliente/PDV (busca substring — robusto a encoding)
+    col_cliente = next((c for c in df.columns if any(k in c.lower() for k in ["cliente", "cod_pdv", "codpdv", "codcliente"])), None)
     if col_cliente is None:
         raise ValueError(f"Coluna de cliente não encontrada. Colunas disponíveis: {list(df.columns)}")
 
     # Detecta coluna de nome
-    col_nome = next((c for c in df.columns if c.lower() in ["nome", "nome fantasia", "nomefantasia", "razao", "razão"]), None)
+    col_nome = next((c for c in df.columns if any(k in c.lower() for k in ["nome", "razao", "razão"])), None)
     if col_nome is None:
         raise ValueError(f"Coluna de nome não encontrada. Colunas disponíveis: {list(df.columns)}")
 
-    # Detecta coluna de dias
-    col_dias = next((c for c in df.columns if c.lower() in ["dias", "diasatraso", "dias_atraso", "dias em atraso", "datavencto", "data vencto"]), None)
+    # Detecta coluna de dias de atraso
+    # Prioridade 1: coluna chamada exatamente "Dias" (valores negativos = vencido)
+    # Prioridade 2: qualquer coluna com "dias" no nome mas SEM "data" (evita DataVencto)
+    col_dias = next((c for c in df.columns if c.strip().lower() == "dias"), None)
+    if col_dias is None:
+        col_dias = next((c for c in df.columns if "dias" in c.lower() and "data" not in c.lower()), None)
     if col_dias is None:
         raise ValueError(f"Coluna de dias não encontrada. Colunas disponíveis: {list(df.columns)}")
 
-    # Detecta coluna de valor — prioriza ValorCorrigido (valor com multa/juros) sobre ValorPendente
-    col_valor = next((c for c in df.columns if c.lower() in ["valorcorrigido", "valor corrigido"]), None)
+    # Detecta coluna de valor — usa substring "valor" para ser robusto a encoding
+    # Prioriza ValorCorrigido (com multa/juros) > ValorPendente > ValorOriginal
+    _cols_valor = [c for c in df.columns if "valor" in c.lower()]
+    print(f"  Colunas com 'valor' encontradas: {_cols_valor}")
+    col_valor = (
+        next((c for c in _cols_valor if "corrig" in c.lower()), None) or
+        next((c for c in _cols_valor if "pend" in c.lower()), None) or
+        next((c for c in _cols_valor if "orig" in c.lower()), None) or
+        next((c for c in _cols_valor), None)
+    )
     if col_valor is None:
-        col_valor = next((c for c in df.columns if c.lower() in ["valorpendente", "valor pendente", "valor", "saldo", "vl_pendente"]), None)
+        col_valor = next((c for c in df.columns if any(k in c.lower() for k in ["saldo", "vl_pend"])), None)
     if col_valor is None:
         raise ValueError(f"Coluna de valor não encontrada. Colunas disponíveis: {list(df.columns)}")
 
