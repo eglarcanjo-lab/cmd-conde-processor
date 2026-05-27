@@ -481,64 +481,24 @@ def processar_inadimplencia(conteudo_bytes):
     if col_setor is None:
         raise ValueError(f"Nenhuma coluna com setores válidos encontrada. Colunas: {list(df.columns)}")
 
-    # ── Mapeamento de colunas — posição FIXA como fonte primária ──────────────
-    # O relatório 120601 (Promax) tem estrutura padronizada:
-    #   pos 1  → Cliente       (código do PDV)
+    # ── Mapeamento POSICIONAL FIXO do relatório 120601 (Promax) ─────────────────
+    # Estrutura imutável — ignoramos nomes (podem ter artefatos de encoding):
+    #   pos 1  → Cliente       (código numérico do PDV)
     #   pos 2  → Nome          (nome fantasia)
-    #   pos 9  → Vendedor      (código RN/setor: 0101→101)
     #   pos 14 → Dias          (dias de atraso, negativo = vencido)
     #   pos 20 → ValorCorrigido (valor corrigido com multa/juros)
-    #   pos 23 → AGING         (faixa de aging)
-    # A detecção por nome é usada apenas como validação/fallback.
     cols = list(df.columns)
     n_cols = len(cols)
 
-    def _by_pos_or_name(pos, keywords):
-        """Usa posição; se o nome não contiver as keywords, busca por nome."""
-        if pos < n_cols and any(k in cols[pos].lower() for k in keywords):
-            return cols[pos]
-        # Fallback: varredura por nome
-        return next((c for c in cols if any(k in c.lower() for k in keywords)), None)
+    if n_cols <= 20:
+        raise ValueError(f"Arquivo 120601 com estrutura inesperada: apenas {n_cols} colunas. Colunas: {cols}")
 
-    col_cliente = _by_pos_or_name(1,  ["cliente", "cod_pdv", "codpdv"])
-    col_nome    = _by_pos_or_name(2,  ["nome", "razao"])
+    col_cliente = cols[1]
+    col_nome    = cols[2]
+    col_dias    = cols[14]
+    col_valor   = cols[20]
 
-    # Dias: posição 14; fallback = qualquer col com "dias" mas sem "data" (evita DataVencto)
-    col_dias = None
-    if 14 < n_cols and "dias" in cols[14].lower() and "data" not in cols[14].lower():
-        col_dias = cols[14]
-    if col_dias is None:
-        col_dias = next((c for c in cols if "dias" in c.lower() and "data" not in c.lower()), None)
-
-    # Valor: posição 20 (ValorCorrigido); fallback por substring
-    col_valor = None
-    if 20 < n_cols and "valor" in cols[20].lower():
-        col_valor = cols[20]
-    if col_valor is None:
-        _cvs = [c for c in cols if "valor" in c.lower()]
-        col_valor = (
-            next((c for c in _cvs if "corrig" in c.lower()), None) or
-            next((c for c in _cvs if "pend"   in c.lower()), None) or
-            next((c for c in _cvs if "orig"   in c.lower()), None) or
-            (next(iter(_cvs), None))
-        )
-
-    # Validações
-    if col_cliente is None:
-        # Último recurso: usa posição 1 direto (confia na estrutura do arquivo)
-        col_cliente = cols[1] if n_cols > 1 else None
-    if col_nome is None:
-        col_nome = cols[2] if n_cols > 2 else None
-    if col_dias is None:
-        col_dias = cols[14] if n_cols > 14 else None
-    if col_valor is None:
-        col_valor = cols[20] if n_cols > 20 else None
-
-    for nome_col, val in [("cliente", col_cliente), ("nome", col_nome), ("dias", col_dias), ("valor", col_valor)]:
-        if val is None:
-            raise ValueError(f"Coluna '{nome_col}' não encontrada. Colunas: {list(df.columns)}")
-
-    print(f"  Mapeamento: setor='{col_setor}', cliente='{col_cliente}'(pos {cols.index(col_cliente)}), nome='{col_nome}'(pos {cols.index(col_nome)}), dias='{col_dias}'(pos {cols.index(col_dias)}), valor='{col_valor}'(pos {cols.index(col_valor)})")
+    print(f"  Mapeamento posicional: setor='{col_setor}', cliente='{col_cliente}'(pos 1), nome='{col_nome}'(pos 2), dias='{col_dias}'(pos 14), valor='{col_valor}'(pos 20)")
 
     # Normaliza setor
     df["_setor"] = df[col_setor].apply(normalizar_setor)
