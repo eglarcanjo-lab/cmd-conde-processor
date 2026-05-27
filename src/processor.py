@@ -447,37 +447,77 @@ def _registrar_sem_categoria(df, mapa_produtos):
 
 def processar_inadimplencia(conteudo_bytes):
     """
-    Processa o arquivo 121601 (inadimplência).
+    Processa o arquivo 120601 (inadimplência).
     Gera a aba inadimplencia_real com títulos vencidos por PDV.
     """
     print("📂 Processando inadimplência...")
     df = ler_csv_inf(conteudo_bytes)
     df.columns = [c.strip() for c in df.columns]
+    print(f"  Colunas encontradas: {list(df.columns)}")
+    print(f"  Total de linhas brutas: {len(df)}")
 
-    # Normaliza setor pelo campo Vendedor
-    df["_setor"] = df["Vendedor"].apply(normalizar_setor)
+    # Detecta coluna de setor/vendedor (flexível)
+    col_setor = next((c for c in df.columns if c.lower() in ["vendedor", "setor", "vende"]), None)
+    if col_setor is None:
+        raise ValueError(f"Coluna de setor não encontrada. Colunas disponíveis: {list(df.columns)}")
+
+    # Detecta coluna de cliente/PDV
+    col_cliente = next((c for c in df.columns if c.lower() in ["cliente", "cod_pdv", "codcliente"]), None)
+    if col_cliente is None:
+        raise ValueError(f"Coluna de cliente não encontrada. Colunas disponíveis: {list(df.columns)}")
+
+    # Detecta coluna de nome
+    col_nome = next((c for c in df.columns if c.lower() in ["nome", "nome fantasia", "nomefantasia", "razao", "razão"]), None)
+    if col_nome is None:
+        raise ValueError(f"Coluna de nome não encontrada. Colunas disponíveis: {list(df.columns)}")
+
+    # Detecta coluna de dias
+    col_dias = next((c for c in df.columns if c.lower() in ["dias", "diasatraso", "dias_atraso", "dias em atraso"]), None)
+    if col_dias is None:
+        raise ValueError(f"Coluna de dias não encontrada. Colunas disponíveis: {list(df.columns)}")
+
+    # Detecta coluna de valor (flexível)
+    col_valor = next((c for c in df.columns if c.lower() in ["valorpendente", "valor pendente", "valor", "saldo", "vl_pendente", "vl pendente"]), None)
+    if col_valor is None:
+        raise ValueError(f"Coluna de valor não encontrada. Colunas disponíveis: {list(df.columns)}")
+
+    # Normaliza setor
+    df["_setor"] = df[col_setor].apply(normalizar_setor)
     df = df[df["_setor"].isin(SETORES_VALIDOS)]
+    print(f"  Linhas após filtro de setor: {len(df)}")
 
-    # Normaliza cod PDV
-    df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0").str.strip()
-    df["_nome"] = df["Nome"].str.strip()
+    if df.empty:
+        print("  ⚠️ Nenhuma linha válida após filtro de setor. Verifique os setores no arquivo.")
+        sobrescrever_aba("inadimplencia_real", pd.DataFrame(columns=["setor","cod_pdv","nome_fantasia","qtd_titulos","valor_total","maior_atraso","aging"]))
+        atualizar_status_arquivo("120601 (Inadimplência)", "⚠️ Sem dados", "Nenhum setor válido encontrado")
+        return pd.DataFrame()
 
-    # Dias: valores negativos = vencido, positivos = a vencer
-    df["_dias"] = pd.to_numeric(df["Dias"].str.strip(), errors="coerce").fillna(0)
+    # Normaliza cod PDV e nome
+    df["_cod_pdv"] = df[col_cliente].str.strip().str.lstrip("0").str.strip()
+    df["_nome"] = df[col_nome].str.strip()
+
+    # Dias: valores negativos = vencido
+    df["_dias"] = pd.to_numeric(df[col_dias].str.strip(), errors="coerce").fillna(0)
 
     # Valor pendente: remove + e vírgula brasileira
-    df["_valor"] = df["ValorPendente"].str.replace("+", "", regex=False).str.replace(",", ".").str.strip()
+    df["_valor"] = df[col_valor].astype(str).str.replace("+", "", regex=False).str.replace(",", ".").str.strip()
     df["_valor"] = pd.to_numeric(df["_valor"], errors="coerce").fillna(0)
+
+    # AGING — coluna opcional
+    col_aging = next((c for c in df.columns if c.upper() == "AGING"), None)
+
+    agg_dict = {
+        "qtd_titulos": ("_valor", "count"),
+        "valor_total": ("_valor", "sum"),
+        "maior_atraso": ("_dias", "min"),
+    }
+    if col_aging:
+        agg_dict["aging"] = (col_aging, lambda x: x.mode()[0] if len(x) > 0 else "")
 
     # Agrupa por PDV
     resumo = (
         df.groupby(["_setor", "_cod_pdv", "_nome"])
-        .agg(
-            qtd_titulos=("_valor", "count"),
-            valor_total=("_valor", "sum"),
-            maior_atraso=("_dias", "min"),  # mais negativo = mais atrasado
-            aging=("AGING", lambda x: x.mode()[0] if len(x) > 0 else ""),
-        )
+        .agg(**agg_dict)
         .reset_index()
         .rename(columns={
             "_setor": "setor",
@@ -485,6 +525,9 @@ def processar_inadimplencia(conteudo_bytes):
             "_nome": "nome_fantasia",
         })
     )
+
+    if "aging" not in resumo.columns:
+        resumo["aging"] = ""
 
     resumo["maior_atraso"] = resumo["maior_atraso"].abs().astype(int)
     resumo["valor_total"] = resumo["valor_total"].round(2)
