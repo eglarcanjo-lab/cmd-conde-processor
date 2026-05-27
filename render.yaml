@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: cmd-conde-processor
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --chdir src app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 300
+    envVars:
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        sync: false
+      - key: GOOGLE_PRIVATE_KEY
+        sync: false
+      - key: PROCESSOR_SECRET
+        sync: false
