@@ -457,8 +457,9 @@ def processar_inadimplencia(conteudo_bytes):
     print(f"  Total de linhas brutas: {len(df)}")
 
     # Auto-detecta coluna de setor: procura qual coluna tem valores em SETORES_VALIDOS
+    # No arquivo 120601 a coluna correta é "Vendedor" (código do RN: 0101→101)
     col_setor = None
-    candidatos_setor = ["Superv", "Vendedor", "GDD", "UNB", "Setor", "setor", "RN"]
+    candidatos_setor = ["Vendedor", "Superv", "GDD", "UNB", "Setor", "setor", "RN"]
     # 1) tenta nomes conhecidos primeiro
     for c in candidatos_setor:
         if c in df.columns:
@@ -495,8 +496,10 @@ def processar_inadimplencia(conteudo_bytes):
     if col_dias is None:
         raise ValueError(f"Coluna de dias não encontrada. Colunas disponíveis: {list(df.columns)}")
 
-    # Detecta coluna de valor (flexível)
-    col_valor = next((c for c in df.columns if c.lower() in ["valorpendente", "valor pendente", "valorcorrigido", "valor corrigido", "valor", "saldo", "vl_pendente"]), None)
+    # Detecta coluna de valor — prioriza ValorCorrigido (valor com multa/juros) sobre ValorPendente
+    col_valor = next((c for c in df.columns if c.lower() in ["valorcorrigido", "valor corrigido"]), None)
+    if col_valor is None:
+        col_valor = next((c for c in df.columns if c.lower() in ["valorpendente", "valor pendente", "valor", "saldo", "vl_pendente"]), None)
     if col_valor is None:
         raise ValueError(f"Coluna de valor não encontrada. Colunas disponíveis: {list(df.columns)}")
 
