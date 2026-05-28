@@ -1652,42 +1652,48 @@ def processar_aba_promocao(conteudo_bytes):
     df['_setor'] = df['_cod'].map(mapa_setor).fillna("")
     df['_dia_visita'] = df['_cod'].map(mapa_dia).fillna("")
 
-    # Detalhe por PDV
-    df_det = df[['_setor', '_cod', '_dia_visita', '_visitas', '_acesso']].copy()
-    df_det.columns = ['setor', 'cod_pdv', 'dia_visita', 'visitas', 'acesso_promo']
-    df_det['pct'] = (df_det['acesso_promo'] / df_det['visitas'].replace(0, 1) * 100).round(1)
+    # Coluna E (%Acesso Promoção) — valores decimais (0.2 = 20%).
+    # Usamos posição fixa (índice 4) para evitar problemas de encoding com o nome.
+    col_pct_promo = df.columns[4]
+    df['_pct_raw'] = pd.to_numeric(df[col_pct_promo], errors='coerce').fillna(0)
+
+    # Detalhe por PDV — pct vem direto da coluna % (mais fiel que recalcular)
+    df_det = df[['_setor', '_cod', '_dia_visita', '_visitas', '_acesso', '_pct_raw']].copy()
+    df_det.columns = ['setor', 'cod_pdv', 'dia_visita', 'visitas', 'acesso_promo', '_pct_raw']
+    df_det['pct'] = (df_det['_pct_raw'] * 100).round(1)
+    df_det = df_det.drop(columns=['_pct_raw'])
     df_det['mes_referencia'] = date.today().strftime("%Y-%m")
     sobrescrever_aba("spo_promo_detalhe", df_det)
 
-    # Resumo por setor
+    # Resumo por setor — usa média simples da coluna %Acesso Promoção (não razão de totais)
     setores_validos = SETORES_VALIDOS
     df_setor = df[df['_setor'].isin(setores_validos)].copy()
 
     resumo = []
     for setor in sorted(df_setor['_setor'].unique()):
         df_s = df_setor[df_setor['_setor'] == setor]
-        total_vis = df_s['_visitas'].sum()
-        total_ac = df_s['_acesso'].sum()
-        pct = round((total_ac / total_vis * 100) if total_vis > 0 else 0, 1)
+        total_vis = int(df_s['_visitas'].sum())
+        total_ac  = int(df_s['_acesso'].sum())
+        pct = round(df_s['_pct_raw'].mean() * 100, 1)
         resumo.append({
             'setor': setor,
-            'visitas': int(total_vis),
-            'acesso_promo': int(total_ac),
+            'visitas': total_vis,
+            'acesso_promo': total_ac,
             'pct': pct,
             'meta': META_PROMO_PCT,
             'ok': "OK" if pct >= META_PROMO_PCT else "NOK",
             'mes_referencia': date.today().strftime("%Y-%m"),
         })
-        print(f"  Setor {setor}: {int(total_ac)}/{int(total_vis)} ({pct}%)")
+        print(f"  Setor {setor}: {total_ac}/{total_vis} ({pct}%)")
 
-    # Total operação
-    total_op_vis = df['_visitas'].sum()
-    total_op_ac = df['_acesso'].sum()
-    pct_op = round((total_op_ac / total_op_vis * 100) if total_op_vis > 0 else 0, 1)
+    # Total operação — média simples de TODOS os PDVs do arquivo
+    total_op_vis = int(df['_visitas'].sum())
+    total_op_ac  = int(df['_acesso'].sum())
+    pct_op = round(df['_pct_raw'].mean() * 100, 1)
     resumo.append({
         'setor': 'OPERACAO',
-        'visitas': int(total_op_vis),
-        'acesso_promo': int(total_op_ac),
+        'visitas': total_op_vis,
+        'acesso_promo': total_op_ac,
         'pct': pct_op,
         'meta': META_PROMO_PCT,
         'ok': "OK" if pct_op >= META_PROMO_PCT else "NOK",
@@ -1696,8 +1702,8 @@ def processar_aba_promocao(conteudo_bytes):
 
     df_resumo = pd.DataFrame(resumo)
     sobrescrever_aba("spo_promo_resumo", df_resumo)
-    atualizar_status_arquivo("SPO - Aba Promoção", "✅ OK", f"Operação: {pct_op}% ({int(total_op_ac)}/{int(total_op_vis)} visitas)")
-    print(f"  ✅ Aba Promoção: {pct_op}% operação | {len([r for r in resumo if r['setor'] != 'OPERACAO'])} setores mapeados")
+    atualizar_status_arquivo("SPO - Aba Promoção", "✅ OK", f"Operação: {pct_op}% (média simples | {total_op_ac}/{total_op_vis} acessos/visitas)")
+    print(f"  ✅ Aba Promoção: {pct_op}% operação (média simples) | {len([r for r in resumo if r['setor'] != 'OPERACAO'])} setores mapeados")
     return df_det
 
 
