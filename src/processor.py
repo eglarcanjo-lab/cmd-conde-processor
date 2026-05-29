@@ -30,7 +30,9 @@ def ler_csv_inf(conteudo_bytes):
         texto = conteudo_bytes.decode(enc, errors="replace")
     except Exception:
         texto = conteudo_bytes.decode("latin-1", errors="replace")
-    return pd.read_csv(io.StringIO(texto), sep=";", dtype=str, low_memory=False)
+    # index_col=False: impede que pandas use a 1ª coluna de dados como índice
+    # quando o CSV tem ponto-e-vírgula no final de cada linha (campo extra vazio).
+    return pd.read_csv(io.StringIO(texto), sep=";", dtype=str, low_memory=False, index_col=False)
 
 
 def normalizar_setor(setor_raw):
