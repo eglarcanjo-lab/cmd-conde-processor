@@ -482,23 +482,26 @@ def processar_inadimplencia(conteudo_bytes):
         raise ValueError(f"Nenhuma coluna com setores válidos encontrada. Colunas: {list(df.columns)}")
 
     # ── Mapeamento POSICIONAL FIXO do relatório 120601 (Promax) ─────────────────
-    # Estrutura imutável — ignoramos nomes (podem ter artefatos de encoding):
-    #   pos 1  → Cliente       (código numérico do PDV)
-    #   pos 2  → Nome          (nome fantasia)
-    #   pos 14 → Dias          (dias de atraso, negativo = vencido)
-    #   pos 20 → ValorCorrigido (valor corrigido com multa/juros)
+    # Estrutura imutável — ignoramos nomes de coluna (podem ter artefatos de encoding):
+    #   pos 1  → Cliente        (código numérico do PDV)
+    #   pos 2  → Nome           (nome fantasia)
+    #   pos 14 → Dias           (dias de atraso, negativo = vencido)
+    #   pos 19 → ValorPendente  (valor ainda em aberto — sem correção por juros)
     cols = list(df.columns)
     n_cols = len(cols)
 
-    if n_cols <= 20:
+    if n_cols <= 19:
         raise ValueError(f"Arquivo 120601 com estrutura inesperada: apenas {n_cols} colunas. Colunas: {cols}")
 
     col_cliente = cols[1]
     col_nome    = cols[2]
     col_dias    = cols[14]
-    col_valor   = cols[20]
+    col_valor   = cols[19]   # ValorPendente (pos 19) = valor real em aberto
 
-    print(f"  Mapeamento posicional: setor='{col_setor}', cliente='{col_cliente}'(pos 1), nome='{col_nome}'(pos 2), dias='{col_dias}'(pos 14), valor='{col_valor}'(pos 20)")
+    print(f"  Mapeamento posicional: setor='{col_setor}', cliente='{col_cliente}'(pos 1), nome='{col_nome}'(pos 2), dias='{col_dias}'(pos 14), valor='{col_valor}'(pos 19)")
+    # Amostra dos 3 primeiros registros para diagnóstico
+    for _, row in df.head(3).iterrows():
+        print(f"    ex: cliente={str(row[col_cliente]).strip()}, nome={str(row[col_nome]).strip()}, dias={str(row[col_dias]).strip()}, valor={str(row[col_valor]).strip()}")
 
     # Normaliza setor
     df["_setor"] = df[col_setor].apply(normalizar_setor)
@@ -511,19 +514,27 @@ def processar_inadimplencia(conteudo_bytes):
         atualizar_status_arquivo("120601 (Inadimplência)", "⚠️ Sem dados", "Nenhum setor válido encontrado")
         return pd.DataFrame()
 
-    # Normaliza cod PDV e nome
-    df["_cod_pdv"] = df[col_cliente].str.strip().str.lstrip("0").str.strip()
-    df["_nome"] = df[col_nome].str.strip()
+    # Normaliza cod PDV (remove zeros à esquerda) e nome
+    df["_cod_pdv"] = df[col_cliente].astype(str).str.strip().str.lstrip("0").str.strip()
+    df["_nome"]    = df[col_nome].astype(str).str.strip()
 
-    # Dias: valores negativos = vencido
-    df["_dias"] = pd.to_numeric(df[col_dias].str.strip(), errors="coerce").fillna(0)
+    # Dias: valores negativos = vencido há N dias
+    df["_dias"] = pd.to_numeric(
+        df[col_dias].astype(str).str.strip().str.replace(r"[^\d\-]", "", regex=True),
+        errors="coerce"
+    ).fillna(0)
 
-    # Valor pendente: remove + e vírgula brasileira
-    df["_valor"] = df[col_valor].astype(str).str.replace("+", "", regex=False).str.replace(",", ".").str.strip()
+    # Valor pendente: remove prefixo +, converte vírgula BR para ponto
+    df["_valor"] = (
+        df[col_valor].astype(str)
+        .str.replace("+", "", regex=False)
+        .str.replace(",", ".", regex=False)
+        .str.strip()
+    )
     df["_valor"] = pd.to_numeric(df["_valor"], errors="coerce").fillna(0)
 
-    # AGING — coluna opcional
-    col_aging = next((c for c in df.columns if c.upper() == "AGING"), None)
+    # AGING — busca pelo nome da coluna (tolerante a encoding)
+    col_aging = next((c for c in df.columns if "AGING" in c.upper()), None)
 
     agg_dict = {
         "qtd_titulos": ("_valor", "count"),
