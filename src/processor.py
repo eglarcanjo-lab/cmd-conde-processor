@@ -232,6 +232,9 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     # ── Devoluções ────────────────────────────────────────────────────────────
     _processar_devolucoes(df)
 
+    # ── Volume Diário ─────────────────────────────────────────────────────────
+    _processar_volume_diario(df)
+
     # ── Produtos sem categoria ────────────────────────────────────────────────
     _registrar_sem_categoria(df, mapa_produtos)
 
@@ -336,6 +339,28 @@ def _processar_faltas(df):
         .sort_values("qtd_faltas", ascending=False)
     )
     sobrescrever_aba("faltas", faltas)
+
+
+def _processar_volume_diario(df):
+    """Agrega volume faturado por data x setor x produto (para Volume Diário)."""
+    df_v = df[df["_volume"] > 0].copy()
+    df_v["_data_str"] = df_v["_data"].dt.strftime("%d/%m/%Y")
+
+    vol = (
+        df_v.groupby(["_data_str", "_setor", "Cod. Prod.", "Nome Prod."])
+        ["_volume"].sum()
+        .reset_index()
+        .rename(columns={
+            "_data_str":  "data",
+            "_setor":     "setor",
+            "Cod. Prod.": "cod_produto",
+            "Nome Prod.": "nome_produto",
+            "_volume":    "volume_hl",
+        })
+    )
+    vol["volume_hl"] = vol["volume_hl"].round(3)
+    sobrescrever_aba("volume_diario", vol)
+    print(f"  📊 volume_diario: {len(vol)} linhas geradas")
 
 
 def _processar_devolucoes(df):
