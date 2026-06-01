@@ -1154,11 +1154,16 @@ def processar_faturamento_mktp(conteudo_bytes):
 
 def processar_pontos_bees(conteudo_bytes):
     """
-    Processa o Excel do BI de pontos Bees.
-    Cabeçalho: Código Setor | Segmento RN | Coins Total
+    Processa o Excel do Force (Pontos Bees).
+    Nova estrutura: Período | Geo | Operação | ID | Código UNB | Código Setor |
+                    Segmento RN | Coins Total | Coins Mensais | Coins Diárias | ...
+
+    Lógica: pega o último Período registrado (coluna A, formato YYYYMMDD)
+    e usa o Coins Total (coluna H) desse dia por setor — que representa o
+    acumulado do mês até aquele ponto.
     """
-    import io
-    print("📂 Processando Pontos Bees...")
+    import io, re
+    print("📂 Processando Pontos Force (Bees)...")
     try:
         df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str)
     except Exception:
@@ -1166,28 +1171,51 @@ def processar_pontos_bees(conteudo_bytes):
 
     df.columns = [c.strip() for c in df.columns]
 
-    # Tenta identificar colunas por nome aproximado
-    col_setor = next((c for c in df.columns if "setor" in c.lower() or "código" in c.lower() or "codigo" in c.lower()), df.columns[0])
-    col_pontos = next((c for c in df.columns if "coins" in c.lower() or "ponto" in c.lower() or "total" in c.lower()), df.columns[-1])
+    # ── Identifica colunas ────────────────────────────────────────────────────
+    # Período: coluna A (YYYYMMDD)
+    col_periodo = next((c for c in df.columns if "período" in c.lower() or "periodo" in c.lower()), df.columns[0])
+    # Código Setor: coluna F
+    col_setor   = next((c for c in df.columns if "setor" in c.lower()), None) or df.columns[5]
+    # Coins Total: coluna H — acumulado do mês
+    col_coins   = next((c for c in df.columns if "coins total" in c.lower() or (c.lower().startswith("coins") and "total" in c.lower())), None) or df.columns[7]
 
-    df["_setor"] = df[col_setor].apply(normalizar_setor)
-    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+    print(f"  Colunas → período={col_periodo}, setor={col_setor}, coins_total={col_coins}")
 
-    df["_pontos"] = pd.to_numeric(
-        df[col_pontos].str.replace(",", ".", regex=False).str.strip(),
+    # ── Filtra linhas válidas (Período = 8 dígitos numéricos) ─────────────────
+    df = df[df[col_periodo].astype(str).str.match(r"^\d{8}$", na=False)].copy()
+    if df.empty:
+        print("  ⚠️ Nenhuma linha válida encontrada.")
+        return pd.DataFrame()
+
+    # ── Último período disponível ─────────────────────────────────────────────
+    ultimo_periodo = df[col_periodo].max()
+    df_ultimo = df[df[col_periodo] == ultimo_periodo].copy()
+    print(f"  Último período: {ultimo_periodo} → {len(df_ultimo)} linhas")
+
+    # ── Normaliza setor e coins ───────────────────────────────────────────────
+    df_ultimo["_setor"]  = df_ultimo[col_setor].apply(normalizar_setor)
+    df_ultimo["_pontos"] = pd.to_numeric(
+        df_ultimo[col_coins].astype(str).str.replace(",", ".", regex=False).str.strip(),
         errors="coerce"
     ).fillna(0)
 
-    resultado = df[["_setor", "_pontos"]].rename(
+    df_ultimo = df_ultimo[df_ultimo["_setor"].isin(SETORES_VALIDOS)]
+
+    # ── Mês de referência derivado do período (YYYYMMDD → YYYY-MM) ───────────
+    mes_ref = f"{ultimo_periodo[:4]}-{ultimo_periodo[4:6]}"
+
+    # ── Monta resultado ───────────────────────────────────────────────────────
+    resultado = df_ultimo[["_setor", "_pontos"]].rename(
         columns={"_setor": "setor", "_pontos": "pontos_real"}
-    )
-    resultado["pontos_meta"] = META_PONTOS_BEES
-    resultado["pct_atingimento"] = (resultado["pontos_real"] / META_PONTOS_BEES * 100).round(1)
-    resultado["mes_referencia"] = date.today().strftime("%Y-%m")
+    ).copy()
+    resultado["pontos_meta"]       = META_PONTOS_BEES
+    resultado["pct_atingimento"]   = (resultado["pontos_real"] / META_PONTOS_BEES * 100).round(1)
+    resultado["mes_referencia"]    = mes_ref
 
     sobrescrever_aba("rv_pontos_bees", resultado)
-    atualizar_status_arquivo("Pontos Bees (BI)", "✅ OK", f"{len(resultado)} setores processados")
-    print(f"  ✅ Pontos Bees: {len(resultado)} setores")
+    atualizar_status_arquivo("Pontos Bees (BI)", "✅ OK",
+        f"{len(resultado)} setores | período {ultimo_periodo} | mês {mes_ref}")
+    print(f"  ✅ Pontos Force: {len(resultado)} setores, período {ultimo_periodo}, mês {mes_ref}")
     return resultado
 
 
