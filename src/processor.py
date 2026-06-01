@@ -51,6 +51,53 @@ def normalizar_dia_visita(dia_raw):
     return dia
 
 
+def _mes_ref_do_dado(df, *cols, fallback=None):
+    """
+    Deriva o mês de referência (YYYY-MM) a partir das colunas informadas do DataFrame.
+    Prioriza a coluna 'mes_ano' (tasks BI), depois colunas de data DD/MM/YYYY.
+    Retorna fallback (ou date.today()) se não encontrar nada.
+
+    Evita gravar mes_referencia = mês atual quando o dado é de um mês anterior —
+    problema que acontece ao rodar o processador em 01/06 com dados de maio.
+    """
+    import re as _re
+    for col in cols:
+        if col not in df.columns:
+            continue
+        vals = df[col].astype(str).str.strip()
+        vals = vals[vals.ne("") & vals.ne("nan") & vals.ne("None") & vals.ne("NaN")]
+        if vals.empty:
+            continue
+        # Formato YYYY-MM direto (campo mes_ano do BI)
+        m = vals[vals.str.match(r"^\d{4}-\d{2}")]
+        if not m.empty:
+            return m.mode()[0][:7]
+        # Formato MM/YYYY
+        m = vals[vals.str.match(r"^\d{2}/\d{4}$")]
+        if not m.empty:
+            v = m.mode()[0]
+            return f"{v[3:7]}-{v[:2]}"
+        # Formato DD/MM/YYYY → extrai mês do maior valor (mês mais recente dos dados)
+        m = vals[vals.str.match(r"^\d{2}/\d{2}/\d{4}$")]
+        if not m.empty:
+            try:
+                datas = pd.to_datetime(m, format="%d/%m/%Y", errors="coerce").dropna()
+                if not datas.empty:
+                    return datas.max().strftime("%Y-%m")
+            except Exception:
+                pass
+        # Formato YYYY-MM-DD
+        m = vals[vals.str.match(r"^\d{4}-\d{2}-\d{2}$")]
+        if not m.empty:
+            try:
+                datas = pd.to_datetime(m, format="%Y-%m-%d", errors="coerce").dropna()
+                if not datas.empty:
+                    return datas.max().strftime("%Y-%m")
+            except Exception:
+                pass
+    return fallback or date.today().strftime("%Y-%m")
+
+
 def dia_semana_hoje():
     """Retorna o dia da semana atual no horário de Brasília (0=SEG, 6=DOM)."""
     from datetime import datetime
@@ -1362,7 +1409,9 @@ def processar_visitacao_gv(conteudo_bytes):
 
     df["_nome_pdv"] = df["_pdv"].map(mapa_nomes).fillna("")
     df["_dia_visita"] = df["_pdv"].map(mapa_dia).fillna("")
-    df["mes_referencia"] = date.today().strftime("%Y-%m")
+    # Deriva mês da visitação a partir de colunas de data do arquivo, se houver
+    _mes_visita = _mes_ref_do_dado(df, "Mês", "Período", "Data Visita", "Data", "mes", "data")
+    df["mes_referencia"] = _mes_visita
 
     # Grava detalhe linha por linha
     df_out = df[["_gv", "_setor", "_pdv", "_nome_pdv", "_dia_visita", "_visita", "_gps", "_valida", "mes_referencia"]].copy()
@@ -1394,7 +1443,7 @@ def processar_visitacao_gv(conteudo_bytes):
             "meta": META_VISITACAO_GV,
             "visitados": visitados,
             "pct": pct,
-            "mes_referencia": date.today().strftime("%Y-%m"),
+            "mes_referencia": _mes_visita,
         })
         print(f"  GV {gv}: {visitados}/{META_VISITACAO_GV} PDVs ({pct}%)")
 
@@ -1594,8 +1643,8 @@ def processar_dto_gc(conteudo_bytes):
 
     row = df.iloc[0]
 
-    # Extrai período dos filtros no arquivo
-    mes_ref = date.today().strftime("%Y-%m")
+    # Extrai mês do dado processado, não de date.today()
+    mes_ref = _mes_ref_do_dado(df, "Mês", "Período", "Data", "mes", "data", "Referência")
 
     def get_val(col):
         try:
@@ -1778,7 +1827,7 @@ def calcular_politica_comercial():
         df_ttc["_setor"] = df_ttc["setor"].astype(str).str.strip()
         df_ttc["_pdv"]   = df_ttc["cod_pdv"].astype(str).str.strip()
         df_ttc["_ok"]    = df_ttc["status"].astype(str).str.strip().str.upper() == "VALID"
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df_ttc, "mes_ano")
 
         resumo = []
         df_s_all = df_ttc[df_ttc["_setor"].isin(SETORES_LOCAL)]
@@ -1842,7 +1891,7 @@ def calcular_execucao_menu():
         df_menu["_setor"] = df_menu["setor"].astype(str).str.strip()
         df_menu["_ok"] = df_menu["status"].astype(str).str.strip().str.upper() == "VALID"
         df_menu["_mes"] = df_menu.get("mes_ano", pd.Series(dtype=str)).astype(str).str.strip()
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df_menu, "mes_ano")
 
         resumo = []
         df_s = df_menu[df_menu["_setor"].isin(SETORES_LOCAL)]
@@ -1917,7 +1966,7 @@ def calcular_tarefas_cerveja():
 
         df["_setor"]  = df["setor"].astype(str).str.strip()
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
         resumo = []
         df_s = df[df["_setor"].isin(SETORES_LOCAL)].copy()
@@ -2011,7 +2060,7 @@ def calcular_tarefas_nab():
 
         df["_setor"]  = df["setor"].astype(str).str.strip()
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
         resumo = []
         df_s = df[df["_setor"].isin(SETORES_LOCAL)]
@@ -2085,7 +2134,7 @@ def processar_score5(conteudo_bytes):
         # BATEU META: 1 = OK
         df["_ok"] = df["BATEU META"].astype(str).str.strip() == "1"
 
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes")
         resumo = []
 
         for setor in sorted(df["_setor"].unique()):
@@ -2164,7 +2213,7 @@ def calcular_tarefas_volume():
 
         df["_setor"]  = df["setor"].astype(str).str.strip()
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
         resumo = []
         df_s = df[df["_setor"].isin(SETORES_LOCAL)]
@@ -2242,7 +2291,7 @@ def calcular_tarefas_marketplace():
 
         df["_setor"]  = df["setor"].astype(str).str.strip()
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
         resumo = []
         df_s = df[df["_setor"].isin(SETORES_LOCAL)]
@@ -2321,7 +2370,7 @@ def calcular_tarefas_match():
                 return pd.DataFrame()
         df["_setor"]  = df["setor"].astype(str).str.strip()
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
         resumo = []
         df_s = df[df["_setor"].isin(SETORES_LOCAL)]
         for setor in sorted(df_s["_setor"].unique()):
@@ -2382,7 +2431,7 @@ def calcular_tarefas_cerveja_zero():
 
         df["_setor"]  = df["setor"].astype(str).str.strip()
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
         resumo = []
         df_s = df[df["_setor"].isin(SETORES_LOCAL)]
@@ -2434,16 +2483,21 @@ def calcular_todos_spo_tasks():
         print(f"  ❌ Erro ao carregar tasks: {e}")
         return
 
+    # Deriva o mês dos dados UMA vez e passa para todas as funções —
+    # evita usar date.today() que causaria gravar junho quando processando maio
+    _mr = _mes_ref_do_dado(df_tasks, "mes_ano", "data_visita")
+    print(f"  📅 Mês de referência derivado dos dados: {_mr}")
+
     funcoes = [
-        ("Política Comercial",  lambda: _calcular_politica_com_df(df_tasks)),
-        ("Execução Menu",       lambda: _calcular_menu_com_df(df_tasks)),
-        ("Tasks Cerveja",       lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        None,           "spo_tasks_cerveja_resumo",    "SPO - Tasks Cerveja",    60)),
-        ("Tasks NAB",           lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "nab",         None,           "spo_tasks_nab_resumo",        "SPO - Tasks NAB",        60)),
-        ("Tasks Volume",        lambda: _calcular_tasks_com_df(df_tasks, "volume",                       None,          None,           "spo_tasks_volume_resumo",     "SPO - Tasks Volume",     60)),
-        ("Tasks Marketplace",   lambda: _calcular_tasks_com_df(df_tasks, "marketplace",                  None,          None,           "spo_tasks_marketplace_resumo","SPO - Tasks Marketplace",60)),
-        ("Tasks MATCH",         lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "match",       None,           "spo_tasks_match_resumo",      "SPO - Tasks MATCH",      60)),
-        ("Tasks Cerveja Zero",  lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        r"\bzero\b|\bcero\b", "spo_tasks_cerv_zero_resumo", "SPO - Tasks Cerveja Zero", 60)),
-        ("Tasks Digitalização", lambda: _calcular_tasks_com_df(df_tasks, "digitalização bees",            None,          None,           "spo_tasks_digit_resumo",      "SPO - Tasks Digitalização",60)),
+        ("Política Comercial",  lambda: _calcular_politica_com_df(df_tasks, mes_ref=_mr)),
+        ("Execução Menu",       lambda: _calcular_menu_com_df(df_tasks, mes_ref=_mr)),
+        ("Tasks Cerveja",       lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        None,           "spo_tasks_cerveja_resumo",    "SPO - Tasks Cerveja",    60, mes_ref=_mr)),
+        ("Tasks NAB",           lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "nab",         None,           "spo_tasks_nab_resumo",        "SPO - Tasks NAB",        60, mes_ref=_mr)),
+        ("Tasks Volume",        lambda: _calcular_tasks_com_df(df_tasks, "volume",                       None,          None,           "spo_tasks_volume_resumo",     "SPO - Tasks Volume",     60, mes_ref=_mr)),
+        ("Tasks Marketplace",   lambda: _calcular_tasks_com_df(df_tasks, "marketplace",                  None,          None,           "spo_tasks_marketplace_resumo","SPO - Tasks Marketplace",60, mes_ref=_mr)),
+        ("Tasks MATCH",         lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "match",       None,           "spo_tasks_match_resumo",      "SPO - Tasks MATCH",      60, mes_ref=_mr)),
+        ("Tasks Cerveja Zero",  lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        r"\bzero\b|\bcero\b", "spo_tasks_cerv_zero_resumo", "SPO - Tasks Cerveja Zero", 60, mes_ref=_mr)),
+        ("Tasks Digitalização", lambda: _calcular_tasks_com_df(df_tasks, "digitalização bees",            None,          None,           "spo_tasks_digit_resumo",      "SPO - Tasks Digitalização",60, mes_ref=_mr)),
     ]
 
     for nome, fn in funcoes:
@@ -2456,7 +2510,7 @@ def calcular_todos_spo_tasks():
     print("  ✅ Todos os cálculos SPO tasks concluídos")
 
 
-def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_nome, meta):
+def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_nome, meta, mes_ref=None):
     """Calcula tasks SPO com DataFrame já carregado — evita chamada extra ao Sheets."""
     SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
 
@@ -2487,7 +2541,8 @@ def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_n
 
     df["_setor"]  = df["setor"].astype(str).str.strip()
     df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
-    mes_ref = date.today().strftime("%Y-%m")
+    # Deriva o mês do dado (campo mes_ano do BI), não da data atual
+    mes_ref = mes_ref or _mes_ref_do_dado(df, "mes_ano", "data_visita")
 
     resumo = []
     df_s = df[df["_setor"].isin(SETORES_LOCAL)]
@@ -2510,7 +2565,7 @@ def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_n
     print(f"    ✅ {pct_op}% operação")
 
 
-def _calcular_politica_com_df(df_tasks):
+def _calcular_politica_com_df(df_tasks, mes_ref=None):
     """Wrapper de calcular_politica_comercial usando df já carregado."""
     TASKS_TTC = {"03_05_09", "03_03_01", "03_04_01", "03_05_10"}
     SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
@@ -2523,7 +2578,7 @@ def _calcular_politica_com_df(df_tasks):
     df_ttc["_setor"] = df_ttc["setor"].astype(str).str.strip()
     df_ttc["_pdv"]   = df_ttc["cod_pdv"].astype(str).str.strip()
     df_ttc["_ok"]    = df_ttc["status"].astype(str).str.strip().str.upper() == "VALID"
-    mes_ref = date.today().strftime("%Y-%m")
+    mes_ref = mes_ref or _mes_ref_do_dado(df_ttc, "mes_ano")
 
     resumo = []
     df_s = df_ttc[df_ttc["_setor"].isin(SETORES_LOCAL)]
@@ -2541,7 +2596,7 @@ def _calcular_politica_com_df(df_tasks):
     atualizar_status_arquivo("SPO - Política Comercial", "✅ OK", f"Operação: {pct_op}%")
 
 
-def _calcular_menu_com_df(df_tasks):
+def _calcular_menu_com_df(df_tasks, mes_ref=None):
     """Wrapper de calcular_execucao_menu usando df já carregado."""
     TASKS_MENU = {"03_03_01", "03_05_09", "03_05_10"}
     SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
@@ -2553,7 +2608,7 @@ def _calcular_menu_com_df(df_tasks):
 
     df_menu["_setor"] = df_menu["setor"].astype(str).str.strip()
     df_menu["_ok"]    = df_menu["status"].astype(str).str.strip().str.upper() == "VALID"
-    mes_ref = date.today().strftime("%Y-%m")
+    mes_ref = mes_ref or _mes_ref_do_dado(df_menu, "mes_ano")
 
     resumo = []
     df_s = df_menu[df_menu["_setor"].isin(SETORES_LOCAL)]
@@ -2636,7 +2691,7 @@ def processar_pedido_alone(conteudo_bytes):
         df["nome_pdv"]   = df["cod_pdv_norm"].map(mapa_nome).fillna("").astype(str)
         df["dia_visita"] = df["cod_pdv_norm"].map(mapa_visita).fillna("").astype(str)
 
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
         meta_op = META_ALONE.get(mes_ref, 0)
 
         df_s = df[df["setor"].isin(SETORES_LOCAL)]
@@ -2760,7 +2815,7 @@ def processar_rgb(conteudo_bytes):
         df["desafio_rgb"] = df["Desafio RGB"].astype(str).str.strip() == "1"
         df["task_rgb"]    = df["Task RGB"].astype(str).str.strip() == "1"
 
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         # ── Detalhe ──────────────────────────────────────────────────────────
         df_det = df[["cod_pdv","nome_pdv","setor","base","dia_visita",
@@ -3003,7 +3058,7 @@ def processar_loja_ideal(conteudo_bytes):
         df["nome_pdv"]   = df["_cod_pdv"].apply(norm).map(mapa_nome).fillna(df["Nome do Pdv"]).astype(str)
         df["dia_visita"] = df["_cod_pdv"].apply(norm).map(mapa_dia).fillna("").astype(str)
 
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         # ── Detalhe ──────────────────────────────────────────────────────────
         df_det = df[["_cod_pdv","nome_pdv","setor","gv","dia_visita",
@@ -3105,7 +3160,7 @@ def processar_scanntech(conteudo_bytes):
         df["setor"]      = df["_cod_pdv"].apply(norm if df_base.empty == False else str).map(mapa_setor).fillna("").astype(str)
         df["dia_visita"] = df["_cod_pdv"].apply(norm if df_base.empty == False else str).map(mapa_visita).fillna("").astype(str)
 
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         # ── Detalhe ──────────────────────────────────────────────────────────
         df_det = df[["_cod_pdv","_nome","setor","_gv","dia_visita","_status","_ativo"]].copy()
@@ -3230,7 +3285,7 @@ def processar_portfolio_ideal(conteudo_bytes):
         df["_cod_pdv"] = df["CHAVE PDV"].astype(str).str.split("_").str[-1].str.strip()
         df["dia_visita"] = df["_cod_pdv"].apply(norm).map(mapa_visita).fillna("").astype(str)
 
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         def _to_int(v):
             try:
@@ -3341,7 +3396,7 @@ def processar_atendimento_produtivo(conteudo_bytes):
             try: return round(float(v) * 100, 1)
             except: return None
 
-        mes_ref = date.today().strftime("%Y-%m")
+        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         # ── Detalhe por RN ────────────────────────────────────────────────────
         df_det = []
