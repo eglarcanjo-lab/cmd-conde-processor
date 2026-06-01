@@ -1355,7 +1355,7 @@ def calcular_rv_completa():
 
 META_VISITACAO_GV = 36  # PDVs distintos por GV por mês (ON Trade)
 
-def processar_visitacao_gv(conteudo_bytes):
+def processar_visitacao_gv(conteudo_bytes, mes_ref=None):
     """
     Processa o relatório de Visitação GV na Base Foco.
     Colunas usadas: GV | SETOR | PDV | Visita Válida | GPS GV
@@ -1409,8 +1409,8 @@ def processar_visitacao_gv(conteudo_bytes):
 
     df["_nome_pdv"] = df["_pdv"].map(mapa_nomes).fillna("")
     df["_dia_visita"] = df["_pdv"].map(mapa_dia).fillna("")
-    # Deriva mês da visitação a partir de colunas de data do arquivo, se houver
-    _mes_visita = _mes_ref_do_dado(df, "Mês", "Período", "Data Visita", "Data", "mes", "data")
+    # Mês: usa parâmetro explícito (da UI) com prioridade; fallback tenta colunas do arquivo
+    _mes_visita = mes_ref or _mes_ref_do_dado(df, "Mês", "Período", "Data Visita", "Data", "mes", "data")
     df["mes_referencia"] = _mes_visita
 
     # Grava detalhe linha por linha
@@ -1621,7 +1621,7 @@ def processar_rota_coaching(conteudo_bytes):
 
 META_DTO = {"matinal": 4, "vespertina": 4, "coaching": 2}
 
-def processar_dto_gc(conteudo_bytes):
+def processar_dto_gc(conteudo_bytes, mes_ref=None):
     """
     Processa o relatório de DTO GC x GV.
     Colunas: Status Final TRK | Matinal/Real/Status | Vespertina/Real/Status | Coaching/Real/Status
@@ -1643,8 +1643,8 @@ def processar_dto_gc(conteudo_bytes):
 
     row = df.iloc[0]
 
-    # Extrai mês do dado processado, não de date.today()
-    mes_ref = _mes_ref_do_dado(df, "Mês", "Período", "Data", "mes", "data", "Referência")
+    # Mês: usa parâmetro explícito (da UI) com prioridade; fallback tenta colunas do arquivo
+    mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Período", "Data", "mes", "data", "Referência")
 
     def get_val(col):
         try:
@@ -1697,7 +1697,7 @@ def processar_dto_gc(conteudo_bytes):
 
 META_PROMO_PCT = 10  # 10% das visitas
 
-def processar_aba_promocao(conteudo_bytes):
+def processar_aba_promocao(conteudo_bytes, mes_ref=None):
     """
     Processa relatório de acesso à aba de Promoção no BEES.
     Colunas: unb_pdv | Visitas | Acesso Promoção | %Acesso Promoção | Meta | vs Meta
@@ -2103,7 +2103,7 @@ def calcular_tarefas_nab():
 
 META_SCORE5 = 46  # % — ajustar quando metas oficiais chegarem
 
-def processar_score5(conteudo_bytes):
+def processar_score5(conteudo_bytes, mes_ref=None):
     """
     Processa o relatório ON_TRADE (Score 5 / Faturamento).
     Todos os PDVs do relatório são Score 5.
@@ -2134,7 +2134,7 @@ def processar_score5(conteudo_bytes):
         # BATEU META: 1 = OK
         df["_ok"] = df["BATEU META"].astype(str).str.strip() == "1"
 
-        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes")
+        mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes")
         resumo = []
 
         for setor in sorted(df["_setor"].unique()):
@@ -2635,7 +2635,7 @@ META_ALONE = {
     "2026-06": 910,
 }
 
-def processar_pedido_alone(conteudo_bytes):
+def processar_pedido_alone(conteudo_bytes, mes_ref=None):
     """
     Processa o relatório de Pedido Alone (export do BI Digitalização).
     Cruza com pdv_base para trazer setor, nome_fantasia, dia_visita.
@@ -2691,7 +2691,7 @@ def processar_pedido_alone(conteudo_bytes):
         df["nome_pdv"]   = df["cod_pdv_norm"].map(mapa_nome).fillna("").astype(str)
         df["dia_visita"] = df["cod_pdv_norm"].map(mapa_visita).fillna("").astype(str)
 
-        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
+        mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
         meta_op = META_ALONE.get(mes_ref, 0)
 
         df_s = df[df["setor"].isin(SETORES_LOCAL)]
@@ -2763,7 +2763,7 @@ def processar_pedido_alone(conteudo_bytes):
 
 # ─── SPO — +RGB (Item 20) ─────────────────────────────────────────────────────
 
-def processar_rgb(conteudo_bytes):
+def processar_rgb(conteudo_bytes, mes_ref=None):
     """
     Processa o relatório +RGB (BI exportado).
     Colunas usadas: RN, Base, Unb Pdv, Bateu Meta, Desafio RGB, Task RGB, Nome PDV
@@ -2815,7 +2815,7 @@ def processar_rgb(conteudo_bytes):
         df["desafio_rgb"] = df["Desafio RGB"].astype(str).str.strip() == "1"
         df["task_rgb"]    = df["Task RGB"].astype(str).str.strip() == "1"
 
-        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
+        mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         # ── Detalhe ──────────────────────────────────────────────────────────
         df_det = df[["cod_pdv","nome_pdv","setor","base","dia_visita",
@@ -2889,7 +2889,7 @@ def processar_rgb(conteudo_bytes):
 MESES_PT = {1:"Jan",2:"Fev",3:"Mar",4:"Abr",5:"Mai",6:"Jun",
             7:"Jul",8:"Ago",9:"Set",10:"Out",11:"Nov",12:"Dez"}
 
-def processar_cupons_digitais(conteudo_bytes):
+def processar_cupons_digitais(conteudo_bytes, mes_ref=None):
     """
     Processa o planificador de Cupons Digitais Score 5.
     Colunas: GV, RN, PDV, Nome PDV, Bloqueio, Mês, Cupons, Campanha, Data Próxima Visita
@@ -3006,7 +3006,7 @@ def processar_cupons_digitais(conteudo_bytes):
 
 META_LOJA_IDEAL = 40  # % — placeholder
 
-def processar_loja_ideal(conteudo_bytes):
+def processar_loja_ideal(conteudo_bytes, mes_ref=None):
     """
     Processa o Planificador de Loja Ideal Vizinhança.
     Loja Ideal = Pontuação Total >= 60.
@@ -3058,7 +3058,7 @@ def processar_loja_ideal(conteudo_bytes):
         df["nome_pdv"]   = df["_cod_pdv"].apply(norm).map(mapa_nome).fillna(df["Nome do Pdv"]).astype(str)
         df["dia_visita"] = df["_cod_pdv"].apply(norm).map(mapa_dia).fillna("").astype(str)
 
-        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
+        mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         # ── Detalhe ──────────────────────────────────────────────────────────
         df_det = df[["_cod_pdv","nome_pdv","setor","gv","dia_visita",
@@ -3118,7 +3118,7 @@ def processar_loja_ideal(conteudo_bytes):
 
 META_SCANNTECH = 20  # placeholder — PDVs ativos
 
-def processar_scanntech(conteudo_bytes):
+def processar_scanntech(conteudo_bytes, mes_ref=None):
     """
     Processa a base de Expansão Scanntech.
     Ativo = Descrição Ambev começa com "ATIVO".
@@ -3160,7 +3160,7 @@ def processar_scanntech(conteudo_bytes):
         df["setor"]      = df["_cod_pdv"].apply(norm if df_base.empty == False else str).map(mapa_setor).fillna("").astype(str)
         df["dia_visita"] = df["_cod_pdv"].apply(norm if df_base.empty == False else str).map(mapa_visita).fillna("").astype(str)
 
-        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
+        mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         # ── Detalhe ──────────────────────────────────────────────────────────
         df_det = df[["_cod_pdv","_nome","setor","_gv","dia_visita","_status","_ativo"]].copy()
@@ -3234,7 +3234,7 @@ MAPA_CATEGORIA_REAL = {
 
 COLS_META_PI = ["600","LN","LN ZERO","LITRINHO","INTEIRA","LITRO","RGB"]
 
-def processar_portfolio_ideal(conteudo_bytes):
+def processar_portfolio_ideal(conteudo_bytes, mes_ref=None):
     """
     Processa o ON_TRADE para Portfólio Ideal Score 5.
     META: colunas L-R | REAL HE: T-AI | REAL CORE: AJ-BD | Col S: descartar
@@ -3285,7 +3285,7 @@ def processar_portfolio_ideal(conteudo_bytes):
         df["_cod_pdv"] = df["CHAVE PDV"].astype(str).str.split("_").str[-1].str.strip()
         df["dia_visita"] = df["_cod_pdv"].apply(norm).map(mapa_visita).fillna("").astype(str)
 
-        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
+        mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         def _to_int(v):
             try:
@@ -3361,7 +3361,7 @@ def processar_portfolio_ideal(conteudo_bytes):
 
 META_AP = 0.90  # 90% dos RNs com AP OK
 
-def processar_atendimento_produtivo(conteudo_bytes):
+def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
     """
     Processa o relatório de Atendimento Produtivo (BI exportado).
     Colunas principais:
@@ -3396,7 +3396,7 @@ def processar_atendimento_produtivo(conteudo_bytes):
             try: return round(float(v) * 100, 1)
             except: return None
 
-        mes_ref = _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
+        mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
 
         # ── Detalhe por RN ────────────────────────────────────────────────────
         df_det = []

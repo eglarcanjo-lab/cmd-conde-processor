@@ -90,6 +90,11 @@ def upload_ambos():
         return jsonify({"error": "Token inválido."}), 401
 
     arquivos = request.files
+    # Mês de referência explícito — enviado pela UI (ex: "2026-05")
+    # Garante que relatórios sem coluna de data sejam atribuídos ao mês correto
+    _mes_ref = request.form.get("mes_ref") or None
+    if _mes_ref:
+        print(f"📅 Mês de referência recebido da UI: {_mes_ref}")
     resultados = {}
 
     # Clientes primeiro (pedidos dependem da base de PDVs)
@@ -115,7 +120,7 @@ def upload_ambos():
 
     if "spo_promo" in arquivos:
         try:
-            processar_aba_promocao(arquivos["spo_promo"].read())
+            processar_aba_promocao(arquivos["spo_promo"].read(), mes_ref=_mes_ref)
             resultados["spo_promo"] = "✅ Aba Promoção processada"
         except Exception as e:
             traceback.print_exc()
@@ -123,7 +128,7 @@ def upload_ambos():
 
     if "spo_dto" in arquivos:
         try:
-            processar_dto_gc(arquivos["spo_dto"].read())
+            processar_dto_gc(arquivos["spo_dto"].read(), mes_ref=_mes_ref)
             resultados["spo_dto"] = "✅ DTO GC processado"
         except Exception as e:
             traceback.print_exc()
@@ -139,7 +144,7 @@ def upload_ambos():
 
     if "spo_visitacao_gv" in arquivos:
         try:
-            processar_visitacao_gv(arquivos["spo_visitacao_gv"].read())
+            processar_visitacao_gv(arquivos["spo_visitacao_gv"].read(), mes_ref=_mes_ref)
             resultados["spo_visitacao_gv"] = "✅ Visitação GV processada"
         except Exception as e:
             traceback.print_exc()
@@ -176,7 +181,7 @@ def upload_ambos():
 
     if "spo_score5" in arquivos:
         try:
-            processar_score5(arquivos["spo_score5"].read())
+            processar_score5(arquivos["spo_score5"].read(), mes_ref=_mes_ref)
             resultados["spo_score5"] = "✅ Score 5 processado"
         except Exception as e:
             traceback.print_exc()
@@ -184,7 +189,7 @@ def upload_ambos():
 
     if "spo_cupons" in arquivos:
         try:
-            processar_cupons_digitais(arquivos["spo_cupons"].read())
+            processar_cupons_digitais(arquivos["spo_cupons"].read(), mes_ref=_mes_ref)
             resultados["spo_cupons"] = "✅ Cupons Digitais processado"
         except Exception as e:
             traceback.print_exc()
@@ -192,7 +197,7 @@ def upload_ambos():
 
     if "spo_loja_ideal" in arquivos:
         try:
-            processar_loja_ideal(arquivos["spo_loja_ideal"].read())
+            processar_loja_ideal(arquivos["spo_loja_ideal"].read(), mes_ref=_mes_ref)
             resultados["spo_loja_ideal"] = "✅ Loja Ideal processado"
         except Exception as e:
             traceback.print_exc()
@@ -200,7 +205,7 @@ def upload_ambos():
 
     if "spo_scanntech" in arquivos:
         try:
-            processar_scanntech(arquivos["spo_scanntech"].read())
+            processar_scanntech(arquivos["spo_scanntech"].read(), mes_ref=_mes_ref)
             resultados["spo_scanntech"] = "✅ Scanntech processado"
         except Exception as e:
             traceback.print_exc()
@@ -208,7 +213,7 @@ def upload_ambos():
 
     if "spo_portfolio_ideal" in arquivos:
         try:
-            processar_portfolio_ideal(arquivos["spo_portfolio_ideal"].read())
+            processar_portfolio_ideal(arquivos["spo_portfolio_ideal"].read(), mes_ref=_mes_ref)
             resultados["spo_portfolio_ideal"] = "✅ Portfólio Ideal processado"
         except Exception as e:
             traceback.print_exc()
@@ -216,7 +221,7 @@ def upload_ambos():
 
     if "spo_ap" in arquivos:
         try:
-            processar_atendimento_produtivo(arquivos["spo_ap"].read())
+            processar_atendimento_produtivo(arquivos["spo_ap"].read(), mes_ref=_mes_ref)
             resultados["spo_ap"] = "✅ Atendimento Produtivo processado"
         except Exception as e:
             traceback.print_exc()
@@ -224,7 +229,7 @@ def upload_ambos():
 
     if "spo_rgb" in arquivos:
         try:
-            processar_rgb(arquivos["spo_rgb"].read())
+            processar_rgb(arquivos["spo_rgb"].read(), mes_ref=_mes_ref)
             resultados["spo_rgb"] = "✅ +RGB processado"
         except Exception as e:
             traceback.print_exc()
@@ -232,7 +237,7 @@ def upload_ambos():
 
     if "spo_alone" in arquivos:
         try:
-            processar_pedido_alone(arquivos["spo_alone"].read())
+            processar_pedido_alone(arquivos["spo_alone"].read(), mes_ref=_mes_ref)
             resultados["spo_alone"] = "✅ Pedido Alone processado"
         except Exception as e:
             traceback.print_exc()
