@@ -1080,8 +1080,16 @@ def calcular_rv_volume(mes_referencia=None):
 
 META_PONTOS_BEES = 100_000  # Fixo. Alterar aqui se mudar.
 
-SEGMENTO_OFF = {"101", "102", "103"}  # Match ativo, Mktp inativo
-SEGMENTO_ON  = {"104", "105", "106", "301", "302", "303", "304", "305"}  # Mktp ativo, Match inativo
+SEGMENTO_OFF = {"101", "102", "103"}  # AS/Rota/Sub: Cerveja+NAB+Mktp+Match
+SEGMENTO_ON  = {"104", "105", "106", "301", "302", "303", "304", "305"}  # On Trade: Cerveja+NAB+Mktp
+
+# Pesos oficiais do regulamento de RV (% do PO). Pontos Force = 50% (Meios);
+# os 50% restantes (Resultados) se dividem conforme o segmento.
+# FIXOS no código — substituem o campo "peso" da planilha de metas (que vem corrompido).
+PESOS_RV = {
+    "OFF": {"pontos": 50, "cerveja": 25, "nab": 12.5, "marketplace": 7.5, "match": 5},
+    "ON":  {"pontos": 50, "cerveja": 25, "nab": 15.0, "marketplace": 10.0, "match": 0},
+}
 
 
 def processar_faturamento_mktp(conteudo_bytes):
@@ -1316,39 +1324,31 @@ def calcular_rv_completa():
 
     for setor in todos_setores:
         segmento = "OFF" if setor in SEGMENTO_OFF else "ON"
+        w = PESOS_RV[segmento]  # pesos fixos do regulamento
         ap_ok = ap_map.get(setor, "NOK")
         po_total = po_total_map.get(setor, 1000.0)
 
-        # Pontos Bees (50% do PO)
+        # Pontos Force (Meios) — 50% do PO, sem piso
         pontos_real = pontos_map.get(setor, 0)
         pontos_meta = META_PONTOS_BEES
         pct_pontos  = min((pontos_real / pontos_meta * 100) if pontos_meta > 0 else 0, 150)
-        peso_pontos = metas_map.get(setor, {}).get("PONTOS BEES", {}).get("peso", 50)
+        peso_pontos = w["pontos"]
         rv_pontos   = (po_total * peso_pontos / 100) * (pct_pontos / 100) if ap_ok == "OK" else 0
 
-        # Volume Cerveja
-        meta_cerv  = metas_map.get(setor, {}).get("CERVEJA", {}).get("meta", 0)
-        peso_cerv  = metas_map.get(setor, {}).get("CERVEJA", {}).get("peso", 0)
+        # Metas vêm da planilha; PESOS são fixos por segmento
+        meta_cerv = metas_map.get(setor, {}).get("CERVEJA", {}).get("meta", 0)
+        meta_nab  = metas_map.get(setor, {}).get("NAB", {}).get("meta", 0)
+        meta_mktp = metas_map.get(setor, {}).get("MARKETPLACE", {}).get("meta", 0)
+        meta_match = metas_map.get(setor, {}).get("MATCH", {}).get("meta", 0)
 
-        # Volume NAB
-        meta_nab   = metas_map.get(setor, {}).get("NAB", {}).get("meta", 0)
-        peso_nab   = metas_map.get(setor, {}).get("NAB", {}).get("peso", 0)
+        # Realizados
+        real_cerv  = round(vol_map.get(setor, {}).get("CERVEJA", 0.0), 3)
+        real_nab   = round(vol_map.get(setor, {}).get("NAB", 0.0), 3)
+        real_mktp  = round(mktp_map.get(setor, 0.0), 2)
+        real_match = round(vol_map.get(setor, {}).get("MATCH", 0.0), 3)
 
-        # Match (OFF) ou Mktp (ON)
-        if segmento == "OFF":
-            meta_var  = metas_map.get(setor, {}).get("MATCH", {}).get("meta", 0)
-            peso_var  = metas_map.get(setor, {}).get("MATCH", {}).get("peso", 0)
-            var_label = "MATCH"
-        else:
-            meta_var  = metas_map.get(setor, {}).get("MARKETPLACE", {}).get("meta", 0)
-            peso_var  = metas_map.get(setor, {}).get("MARKETPLACE", {}).get("peso", 0)
-            var_label = "MARKETPLACE"
-
-        real_cerv = round(vol_map.get(setor, {}).get("CERVEJA", 0.0), 3)
-        real_nab  = round(vol_map.get(setor, {}).get("NAB", 0.0), 3)
-        real_var  = (round(mktp_map.get(setor, 0.0), 2)
-                     if segmento == "ON"
-                     else round(vol_map.get(setor, {}).get("MATCH", 0.0), 3))
+        # Indicador variável principal (compat): OFF→Match, ON→Marketplace
+        var_label = "MATCH" if segmento == "OFF" else "MARKETPLACE"
 
         resultados.append({
             "setor":          setor,
@@ -1362,13 +1362,16 @@ def calcular_rv_completa():
             "rv_pontos":      round(rv_pontos, 2),
             "real_cerveja":   real_cerv,
             "meta_cerveja":   meta_cerv,
-            "peso_cerveja":   peso_cerv,
+            "peso_cerveja":   w["cerveja"],
             "real_nab":       real_nab,
             "meta_nab":       meta_nab,
-            "peso_nab":       peso_nab,
-            f"real_{var_label.lower()}": real_var,
-            f"meta_{var_label.lower()}": meta_var,
-            f"peso_{var_label.lower()}": peso_var,
+            "peso_nab":       w["nab"],
+            "real_match":         real_match,
+            "meta_match":         meta_match,
+            "peso_match":         w["match"],
+            "real_marketplace":   real_mktp,
+            "meta_marketplace":   meta_mktp,
+            "peso_marketplace":   w["marketplace"],
             "indicador_variavel": var_label,
             "mes_referencia": date.today().strftime("%Y-%m"),
         })
