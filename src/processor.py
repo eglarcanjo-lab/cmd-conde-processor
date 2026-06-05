@@ -283,6 +283,9 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
 
     # ── Volume RV (mês atual — para cálculo de remuneração) ───────────────────
     processar_volume_rv(df_mes_atual, date.today().strftime("%Y-%m"))
+
+    # ── Vendas por cliente x produto (mês atual — base da assistente Hop) ──────
+    _processar_vendas_cliente(df_mes_atual)
     del df_mes_atual
     gc.collect()
 
@@ -306,6 +309,31 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     gc.collect()
     atualizar_status_arquivo("03014701 (Pedidos)", "✅ OK", f"{n_linhas} linhas processadas")
     print(f"  ✅ Pedidos processados: {n_linhas} linhas")
+
+
+def _processar_vendas_cliente(df_mes):
+    """Vendas do mês por setor x cliente x produto (base de perguntas da Hop).
+    Gera a aba vendas_cliente_produto, usada pela assistente para responder
+    perguntas tipo 'qual cliente comprou mais X esse mês'."""
+    df_v = df_mes[df_mes["_volume"] > 0].copy()
+    if df_v.empty:
+        sobrescrever_aba("vendas_cliente_produto", pd.DataFrame(
+            columns=["setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "volume_hl", "mes_referencia"]))
+        return
+    mes_ref = date.today().strftime("%Y-%m")
+    g = (
+        df_v.groupby(["_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod."])["_volume"]
+        .sum().reset_index()
+        .rename(columns={
+            "_setor": "setor", "_cod_pdv": "cod_pdv", "Nome Cliente": "nome_pdv",
+            "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto", "_volume": "volume_hl",
+        })
+        .sort_values(["setor", "volume_hl"], ascending=[True, False])
+    )
+    g["volume_hl"] = g["volume_hl"].round(3)
+    g["mes_referencia"] = mes_ref
+    sobrescrever_aba("vendas_cliente_produto", g)
+    print(f"  🤖 vendas_cliente_produto (Hop): {len(g)} linhas")
 
 
 def _processar_cobertura(df_atual, df_ant, df_clientes):
