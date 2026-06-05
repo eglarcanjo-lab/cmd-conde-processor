@@ -221,7 +221,8 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     # ── Memória: lê SÓ as 9 colunas usadas (o CSV do Promax tem ~71). ──────────
     # Isso derruba o pico de memória de ~255MB para ~35MB — essencial no Render free.
     COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
-                   "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo", "Desc Tipo Movimento"}
+                   "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo",
+                   "Desc Tipo Movimento", "Nota Fiscal"}
     df = ler_csv_inf(conteudo_bytes, usecols=lambda c: c.strip() in COLS_USADAS)
     df.columns = [c.strip() for c in df.columns]
     gc.collect()
@@ -306,8 +307,12 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     _processar_entregas_efetivadas(df)
     gc.collect()
 
-    # ── Ruptura de estoque (produto/cliente x mês — quadrimestre) ─────────────
+    # ── Ruptura de estoque (detalhe por cliente x produto x dia) ──────────────
     _processar_ruptura(df)
+    gc.collect()
+
+    # ── Itens das notas frustradas (para abrir o pedido na aba Entrega) ───────
+    _processar_nota_itens(df)
     gc.collect()
 
     # ── Devoluções ────────────────────────────────────────────────────────────
@@ -378,18 +383,17 @@ def _processar_entregas_efetivadas(df):
 def _processar_ruptura(df):
     """Ruptura de estoque: produtos com falta (Motivo contém FALTA).
     Volume em ruptura = Volume Marcacao (o que foi pedido mas não entregue).
-    Gera o detalhe por MÊS para todo o quadrimestre do arquivo (o frontend
-    filtra/consolida por mês clicando no gráfico):
-      • ruptura_produto — produto x mês  (cod, nome, categoria, mes, qtd, volume)
-      • ruptura_cliente — cliente x mês  (setor, cod_pdv, nome_pdv, mes, qtd, volume)
+    Gera UM detalhe por ocorrência (cliente x produto x dia) cobrindo todo o
+    quadrimestre — o frontend agrega/filtra/faz drill-down a partir daí:
+      • ruptura_detalhe — setor, cod_pdv, nome_pdv, cod_produto, nome_produto,
+                          categoria, data, mes, qtd_faltas, volume_falta_hl
     """
-    cols_prod = ["cod_produto", "nome_produto", "categoria", "mes", "qtd_faltas", "volume_falta_hl"]
-    cols_cli  = ["setor", "cod_pdv", "nome_pdv", "mes", "qtd_faltas", "volume_falta_hl"]
+    cols = ["setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto",
+            "categoria", "data", "mes", "qtd_faltas", "volume_falta_hl"]
 
     df_falta = df[df["Motivo"].astype(str).str.upper().str.contains("FALTA", na=False)].copy()
     if df_falta.empty:
-        sobrescrever_aba("ruptura_produto", pd.DataFrame(columns=cols_prod))
-        sobrescrever_aba("ruptura_cliente", pd.DataFrame(columns=cols_cli))
+        sobrescrever_aba("ruptura_detalhe", pd.DataFrame(columns=cols))
         print("  📉 ruptura: nenhuma falta registrada")
         return
 
@@ -399,32 +403,62 @@ def _processar_ruptura(df):
     df_falta.loc[sem_marc, "_vol_ruptura"] = df_falta.loc[sem_marc, "_volume"].abs()
     df_falta = df_falta[df_falta["_vol_ruptura"] > 0].copy()
     df_falta["_mes"] = df_falta["_data"].dt.strftime("%Y-%m")
+    df_falta["_data_str"] = df_falta["_data"].dt.strftime("%d/%m/%Y")
     df_falta["_categoria_str"] = df_falta["_categoria"].fillna("").astype(str)
 
-    # ── Produto x mês (todo o quadrimestre) ───────────────────────────────────
-    rp = (
-        df_falta.groupby(["Cod. Prod.", "Nome Prod.", "_categoria_str", "_mes"])
+    det = (
+        df_falta.groupby(["_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.",
+                          "Nome Prod.", "_categoria_str", "_data_str", "_mes"])
         .agg(qtd_faltas=("_vol_ruptura", "size"), volume_falta_hl=("_vol_ruptura", "sum"))
         .reset_index()
-        .rename(columns={"Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto",
-                         "_categoria_str": "categoria", "_mes": "mes"})
+        .rename(columns={
+            "_setor": "setor", "_cod_pdv": "cod_pdv", "Nome Cliente": "nome_pdv",
+            "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto",
+            "_categoria_str": "categoria", "_data_str": "data", "_mes": "mes",
+        })
         .sort_values(["mes", "volume_falta_hl"], ascending=[True, False])
     )
-    rp["volume_falta_hl"] = rp["volume_falta_hl"].round(3)
-    sobrescrever_aba("ruptura_produto", rp[cols_prod])
+    det["volume_falta_hl"] = det["volume_falta_hl"].round(3)
+    sobrescrever_aba("ruptura_detalhe", det[cols])
+    print(f"  📉 ruptura_detalhe: {len(det)} ocorrências")
 
-    # ── Cliente x mês (todo o quadrimestre) ───────────────────────────────────
-    rc = (
-        df_falta.groupby(["_setor", "_cod_pdv", "Nome Cliente", "_mes"])
-        .agg(qtd_faltas=("_vol_ruptura", "size"), volume_falta_hl=("_vol_ruptura", "sum"))
+
+def _processar_nota_itens(df):
+    """Itens (produtos) das notas frustradas — para abrir o pedido ao clicar
+    numa linha do Detalhe da aba Entrega. Escopo: só as notas que aparecem em
+    entregas_frustradas (mantém a aba pequena). Casa devolução.Nota com a
+    coluna 'Nota Fiscal' dos pedidos.
+    """
+    cols = ["nota", "cod_produto", "nome_produto", "volume_marcacao_hl", "volume_entrega_hl"]
+    try:
+        fr = ler_aba("entregas_frustradas")
+    except Exception:
+        fr = pd.DataFrame()
+    if fr.empty or "nota" not in fr.columns or "Nota Fiscal" not in df.columns:
+        sobrescrever_aba("nota_itens", pd.DataFrame(columns=cols))
+        print("  🧾 nota_itens: sem notas frustradas (aba vazia)")
+        return
+
+    notas = set(fr["nota"].astype(str).str.strip().str.lstrip("0"))
+    d = df.copy()
+    d["_nf"] = d["Nota Fiscal"].astype(str).str.strip().str.lstrip("0")
+    d = d[d["_nf"].isin(notas) & (d["_nf"] != "")]
+    if d.empty:
+        sobrescrever_aba("nota_itens", pd.DataFrame(columns=cols))
+        print("  🧾 nota_itens: nenhuma nota casou com os pedidos")
+        return
+
+    g = (
+        d.groupby(["_nf", "Cod. Prod.", "Nome Prod."])
+        .agg(volume_marcacao_hl=("_volume_marcacao", "sum"), volume_entrega_hl=("_volume", "sum"))
         .reset_index()
-        .rename(columns={"_setor": "setor", "_cod_pdv": "cod_pdv",
-                         "Nome Cliente": "nome_pdv", "_mes": "mes"})
-        .sort_values(["mes", "volume_falta_hl"], ascending=[True, False])
+        .rename(columns={"_nf": "nota", "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto"})
+        .sort_values(["nota", "volume_marcacao_hl"], ascending=[True, False])
     )
-    rc["volume_falta_hl"] = rc["volume_falta_hl"].round(3)
-    sobrescrever_aba("ruptura_cliente", rc[cols_cli])
-    print(f"  📉 ruptura_produto: {len(rp)} linhas · ruptura_cliente: {len(rc)} linhas")
+    g["volume_marcacao_hl"] = g["volume_marcacao_hl"].round(3)
+    g["volume_entrega_hl"] = g["volume_entrega_hl"].round(3)
+    sobrescrever_aba("nota_itens", g[cols])
+    print(f"  🧾 nota_itens: {g['nota'].nunique()} notas · {len(g)} itens")
 
 
 def _processar_cobertura(df_atual, df_ant, df_clientes):
