@@ -23,8 +23,10 @@ def detectar_encoding(conteudo_bytes):
     return enc if enc else "latin-1"
 
 
-def ler_csv_inf(conteudo_bytes):
-    """Lê um CSV/INF separado por ; com encoding automático."""
+def ler_csv_inf(conteudo_bytes, usecols=None):
+    """Lê um CSV/INF separado por ; com encoding automático.
+    usecols: opcional — callable ou lista para carregar só algumas colunas
+    (reduz drasticamente a memória em arquivos largos, ex: pedidos 71 colunas)."""
     enc = detectar_encoding(conteudo_bytes)
     try:
         texto = conteudo_bytes.decode(enc, errors="replace")
@@ -32,7 +34,7 @@ def ler_csv_inf(conteudo_bytes):
         texto = conteudo_bytes.decode("latin-1", errors="replace")
     # index_col=False: impede que pandas use a 1ª coluna de dados como índice
     # quando o CSV tem ponto-e-vírgula no final de cada linha (campo extra vazio).
-    return pd.read_csv(io.StringIO(texto), sep=";", dtype=str, low_memory=False, index_col=False)
+    return pd.read_csv(io.StringIO(texto), sep=";", dtype=str, low_memory=False, index_col=False, usecols=usecols)
 
 
 def normalizar_setor(setor_raw):
@@ -216,13 +218,12 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     """
     import gc
     print("📂 Processando pedidos...")
-    df = ler_csv_inf(conteudo_bytes)
+    # ── Memória: lê SÓ as 9 colunas usadas (o CSV do Promax tem ~71). ──────────
+    # Isso derruba o pico de memória de ~255MB para ~35MB — essencial no Render free.
+    COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
+                   "Nome Prod.", "Volume Entrega", "Motivo", "Desc Tipo Movimento"}
+    df = ler_csv_inf(conteudo_bytes, usecols=lambda c: c.strip() in COLS_USADAS)
     df.columns = [c.strip() for c in df.columns]
-
-    # ── Memória: mantém só as colunas usadas (CSV do Promax tem dezenas) ───────
-    COLS_USADAS = ["Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
-                   "Nome Prod.", "Volume Entrega", "Motivo", "Desc Tipo Movimento"]
-    df = df[[c for c in COLS_USADAS if c in df.columns]].copy()
     gc.collect()
 
     # Normalizar setor
