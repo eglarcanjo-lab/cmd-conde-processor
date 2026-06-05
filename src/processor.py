@@ -221,7 +221,7 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     # ── Memória: lê SÓ as 9 colunas usadas (o CSV do Promax tem ~71). ──────────
     # Isso derruba o pico de memória de ~255MB para ~35MB — essencial no Render free.
     COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
-                   "Nome Prod.", "Volume Entrega", "Motivo", "Desc Tipo Movimento"}
+                   "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo", "Desc Tipo Movimento"}
     df = ler_csv_inf(conteudo_bytes, usecols=lambda c: c.strip() in COLS_USADAS)
     df.columns = [c.strip() for c in df.columns]
     gc.collect()
@@ -247,9 +247,18 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     del cod_norm
     gc.collect()
 
-    # Normalizar volume
+    # Normalizar volume (Volume Entrega = faturado/entregue — base padrão)
     df["_volume"] = pd.to_numeric(
         df["Volume Entrega"].astype(str).str.replace(",", ".", regex=False).str.strip(),
+        errors="coerce"
+    ).fillna(0.0)
+
+    # Volume Marcacao (col AI) = o que foi pedido/marcado. Usado para:
+    #  • Volume Diário do DIA ATUAL (ainda não há faturamento/entrega)
+    #  • Ruptura de estoque (volume marcado que não foi entregue por falta)
+    df["_volume_marcacao"] = pd.to_numeric(
+        df.get("Volume Marcacao", pd.Series(index=df.index, dtype=str))
+          .astype(str).str.replace(",", ".", regex=False).str.strip(),
         errors="coerce"
     ).fillna(0.0)
 
@@ -286,11 +295,18 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
 
     # ── Vendas por cliente x produto (mês atual — base da assistente Hop) ──────
     _processar_vendas_cliente(df_mes_atual)
+
+    # ── Entregas efetivadas do mês (Detalhamento HOP › Entrega) ───────────────
+    _processar_entregas_efetivadas(df_mes_atual)
     del df_mes_atual
     gc.collect()
 
     # ── Faltas ────────────────────────────────────────────────────────────────
     _processar_faltas(df)
+    gc.collect()
+
+    # ── Ruptura de estoque (mês + comparativo quadrimestre) ───────────────────
+    _processar_ruptura(df)
     gc.collect()
 
     # ── Devoluções ────────────────────────────────────────────────────────────
@@ -334,6 +350,88 @@ def _processar_vendas_cliente(df_mes):
     g["mes_referencia"] = mes_ref
     sobrescrever_aba("vendas_cliente_produto", g)
     print(f"  🤖 vendas_cliente_produto (Hop): {len(g)} linhas")
+
+
+def _processar_entregas_efetivadas(df_mes):
+    """Volume entregue (efetivado) no mês por setor — denominador da taxa de
+    frustração no Detalhamento HOP › Entrega. Usa Volume Entrega (faturado)."""
+    df_v = df_mes[df_mes["_volume"] > 0]
+    mes_ref = date.today().strftime("%Y-%m")
+    if df_v.empty:
+        sobrescrever_aba("entregas_efetivadas", pd.DataFrame(
+            columns=["setor", "volume_entregue_hl", "linhas", "mes_referencia"]))
+        return
+    g = (
+        df_v.groupby("_setor")
+        .agg(volume_entregue_hl=("_volume", "sum"), linhas=("_volume", "size"))
+        .reset_index()
+        .rename(columns={"_setor": "setor"})
+        .sort_values("setor")
+    )
+    g["volume_entregue_hl"] = g["volume_entregue_hl"].round(3)
+    g["mes_referencia"] = mes_ref
+    sobrescrever_aba("entregas_efetivadas", g)
+    print(f"  📦 entregas_efetivadas: {len(g)} setores")
+
+
+def _processar_ruptura(df):
+    """Ruptura de estoque: produtos com falta (Motivo contém FALTA).
+    Volume em ruptura = Volume Marcacao (o que foi pedido mas não entregue).
+    Gera duas abas:
+      • ruptura_mes          — mês atual, por setor x produto (resumo)
+      • ruptura_quadrimestre — por produto x mês (comparativo dos ~4 meses do arquivo)
+    """
+    cols_mes = ["setor", "cod_produto", "nome_produto", "categoria",
+                "qtd_faltas", "volume_falta_hl", "mes_referencia"]
+    cols_quad = ["cod_produto", "nome_produto", "mes", "qtd_faltas", "volume_falta_hl"]
+
+    df_falta = df[df["Motivo"].astype(str).str.upper().str.contains("FALTA", na=False)].copy()
+    if df_falta.empty:
+        sobrescrever_aba("ruptura_mes", pd.DataFrame(columns=cols_mes))
+        sobrescrever_aba("ruptura_quadrimestre", pd.DataFrame(columns=cols_quad))
+        print("  📉 ruptura: nenhuma falta registrada")
+        return
+
+    # Volume em ruptura: usa marcação; se zerada, cai para volume entrega (>0)
+    df_falta["_vol_ruptura"] = df_falta["_volume_marcacao"]
+    sem_marc = df_falta["_vol_ruptura"] <= 0
+    df_falta.loc[sem_marc, "_vol_ruptura"] = df_falta.loc[sem_marc, "_volume"].abs()
+    df_falta = df_falta[df_falta["_vol_ruptura"] > 0].copy()
+    df_falta["_mes"] = df_falta["_data"].dt.strftime("%Y-%m")
+    df_falta["_categoria_str"] = df_falta["_categoria"].fillna("").astype(str)
+
+    mes_ref = date.today().strftime("%Y-%m")
+
+    # ── Resumo do mês atual: setor x produto ──────────────────────────────────
+    df_m = df_falta[df_falta["_mes"] == mes_ref]
+    if df_m.empty:
+        sobrescrever_aba("ruptura_mes", pd.DataFrame(columns=cols_mes))
+    else:
+        rm = (
+            df_m.groupby(["_setor", "Cod. Prod.", "Nome Prod.", "_categoria_str"])
+            .agg(qtd_faltas=("_vol_ruptura", "size"), volume_falta_hl=("_vol_ruptura", "sum"))
+            .reset_index()
+            .rename(columns={
+                "_setor": "setor", "Cod. Prod.": "cod_produto",
+                "Nome Prod.": "nome_produto", "_categoria_str": "categoria",
+            })
+            .sort_values("volume_falta_hl", ascending=False)
+        )
+        rm["volume_falta_hl"] = rm["volume_falta_hl"].round(3)
+        rm["mes_referencia"] = mes_ref
+        sobrescrever_aba("ruptura_mes", rm[cols_mes])
+
+    # ── Comparativo quadrimestre: produto x mês ───────────────────────────────
+    rq = (
+        df_falta.groupby(["Cod. Prod.", "Nome Prod.", "_mes"])
+        .agg(qtd_faltas=("_vol_ruptura", "size"), volume_falta_hl=("_vol_ruptura", "sum"))
+        .reset_index()
+        .rename(columns={"Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto", "_mes": "mes"})
+        .sort_values(["mes", "volume_falta_hl"], ascending=[True, False])
+    )
+    rq["volume_falta_hl"] = rq["volume_falta_hl"].round(3)
+    sobrescrever_aba("ruptura_quadrimestre", rq[cols_quad])
+    print(f"  📉 ruptura_mes: {len(df_m)} linhas · ruptura_quadrimestre: {len(rq)} linhas")
 
 
 def _processar_cobertura(df_atual, df_ant, df_clientes):
@@ -436,25 +534,112 @@ def _processar_faltas(df):
 
 
 def _processar_volume_diario(df):
-    """Agrega volume faturado por data x setor x produto (para Volume Diário)."""
-    df_v = df[df["_volume"] > 0].copy()
-    df_v["_data_str"] = df_v["_data"].dt.strftime("%d/%m/%Y")
+    """Agrega volume por data x setor x produto (para Volume Diário).
 
+    Regra do DIA ATUAL: no dia de hoje ainda não há faturamento (Volume Entrega
+    vem zerado), então usamos o Volume Marcacao (col AI) — o que está sendo
+    marcado/pedido — para o RN já enxergar o volume do dia. Dias anteriores
+    continuam usando Volume Entrega (faturado/entregue), que é o correto.
+    No dia seguinte o que foi faturado já entra no Volume Entrega e o racional
+    "pula" para o novo dia atual.
+    """
+    hoje_str = date.today().strftime("%d/%m/%Y")
+    df_d = df.copy()
+    df_d["_data_str"] = df_d["_data"].dt.strftime("%d/%m/%Y")
+
+    # Volume efetivo: marcação só no dia de hoje, entrega nos demais dias
+    eh_hoje = df_d["_data_str"] == hoje_str
+    df_d["_vol_efetivo"] = df_d["_volume"]
+    df_d.loc[eh_hoje, "_vol_efetivo"] = df_d.loc[eh_hoje, "_volume_marcacao"]
+
+    df_v = df_d[df_d["_vol_efetivo"] > 0]
     vol = (
         df_v.groupby(["_data_str", "_setor", "Cod. Prod.", "Nome Prod."])
-        ["_volume"].sum()
+        ["_vol_efetivo"].sum()
         .reset_index()
         .rename(columns={
-            "_data_str":  "data",
-            "_setor":     "setor",
-            "Cod. Prod.": "cod_produto",
-            "Nome Prod.": "nome_produto",
-            "_volume":    "volume_hl",
+            "_data_str":   "data",
+            "_setor":      "setor",
+            "Cod. Prod.":  "cod_produto",
+            "Nome Prod.":  "nome_produto",
+            "_vol_efetivo":"volume_hl",
         })
     )
     vol["volume_hl"] = vol["volume_hl"].round(3)
     sobrescrever_aba("volume_diario", vol)
-    print(f"  📊 volume_diario: {len(vol)} linhas geradas")
+    print(f"  📊 volume_diario: {len(vol)} linhas (dia atual {hoje_str} via marcação)")
+
+
+def processar_devolucoes_relatorio(conteudo_bytes, mes_ref=None):
+    """Processa o relatório de DEVOLUÇÕES (entregas frustradas).
+
+    Layout posicional (separador ';', cabeçalho com 'Setor' duplicado):
+      0 Setor(00xxxx) · 1 Data · 3 Nota · 6 Cod.Cliente · 7 Nome Cliente ·
+      10 Setor(xxx) · 12 Valor · 13 Volume · 14 Data Devol. · 15 Cod.Motivo ·
+      16 Desc.Motivo
+    Gera as abas:
+      • entregas_frustradas        — detalhe por nota (motivo, volume, valor)
+      • entregas_resumo_motivo     — resumo por setor x motivo (qtd, volume, valor)
+    """
+    print("📂 Processando devoluções (entregas frustradas)...")
+    df = ler_csv_inf(conteudo_bytes)
+    cols = list(df.columns)
+    if len(cols) < 17:
+        raise ValueError(f"Relatório de devoluções com estrutura inesperada: {len(cols)} colunas.")
+
+    def col(i):
+        return df[cols[i]].astype(str).str.strip()
+
+    out = pd.DataFrame({
+        "setor":       col(10).apply(normalizar_setor),
+        "data":        col(1),
+        "nota":        col(3),
+        "cod_pdv":     col(6).str.lstrip("0").str.strip(),
+        "nome_pdv":    col(7),
+        "placa":       col(11),
+        "valor":       col(12),
+        "volume_hl":   col(13),
+        "data_devol":  col(14),
+        "cod_motivo":  col(15),
+        "desc_motivo": col(16),
+    })
+    out = out[out["setor"].isin(SETORES_VALIDOS)]
+
+    # Numéricos no padrão BR (vírgula decimal)
+    out["valor"] = pd.to_numeric(out["valor"].str.replace(".", "", regex=False).str.replace(",", ".", regex=False), errors="coerce").fillna(0.0).round(2)
+    out["volume_hl"] = pd.to_numeric(out["volume_hl"].str.replace(",", ".", regex=False), errors="coerce").fillna(0.0).round(3)
+    out["desc_motivo"] = out["desc_motivo"].str.strip().str.rstrip(".").str.upper()
+
+    # Mês de referência: derivado da Data (DD/MM/YYYY), fallback no parâmetro/UI
+    fallback = mes_ref or date.today().strftime("%Y-%m")
+    datas = pd.to_datetime(out["data"], format="%d/%m/%Y", errors="coerce")
+    out["mes_referencia"] = datas.dt.strftime("%Y-%m").fillna(fallback)
+
+    if out.empty:
+        sobrescrever_aba("entregas_frustradas", pd.DataFrame(columns=[
+            "setor","data","nota","cod_pdv","nome_pdv","placa","valor","volume_hl","data_devol","cod_motivo","desc_motivo","mes_referencia"]))
+        sobrescrever_aba("entregas_resumo_motivo", pd.DataFrame(columns=[
+            "setor","desc_motivo","qtd","volume_hl","valor","mes_referencia"]))
+        atualizar_status_arquivo("Devoluções (Entregas Frustradas)", "⚠️ Sem dados", "Nenhum setor válido")
+        print("  ⚠️ Devoluções: nenhuma linha válida")
+        return out
+
+    out = out.sort_values(["setor", "data"])
+    sobrescrever_aba("entregas_frustradas", out)
+
+    resumo = (
+        out.groupby(["setor", "desc_motivo", "mes_referencia"])
+        .agg(qtd=("volume_hl", "size"), volume_hl=("volume_hl", "sum"), valor=("valor", "sum"))
+        .reset_index()
+        .sort_values(["setor", "volume_hl"], ascending=[True, False])
+    )
+    resumo["volume_hl"] = resumo["volume_hl"].round(3)
+    resumo["valor"] = resumo["valor"].round(2)
+    sobrescrever_aba("entregas_resumo_motivo", resumo)
+
+    atualizar_status_arquivo("Devoluções (Entregas Frustradas)", "✅ OK", f"{len(out)} devoluções · {resumo['desc_motivo'].nunique()} motivos")
+    print(f"  ✅ Devoluções: {len(out)} linhas · {len(resumo)} (setor x motivo)")
+    return out
 
 
 def _processar_devolucoes(df):

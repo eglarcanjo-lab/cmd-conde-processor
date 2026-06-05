@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -251,6 +251,14 @@ def upload_ambos():
             traceback.print_exc()
             resultados["inadimplencia"] = f"❌ Erro: {str(e)[:100]}"
 
+    if "devolucoes" in arquivos:
+        try:
+            df_dev = processar_devolucoes_relatorio(arquivos["devolucoes"].read(), mes_ref=_mes_ref)
+            resultados["devolucoes"] = f"✅ {len(df_dev)} devoluções processadas"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["devolucoes"] = f"❌ Erro: {str(e)[:100]}"
+
     if "pedidos" in arquivos:
         try:
             processar_pedidos(
@@ -307,6 +315,23 @@ def upload_inadimplencia():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("121601 (Inadimplência)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/devolucoes", methods=["POST"])
+def upload_devolucoes():
+    """Recebe o relatório de devoluções (entregas frustradas) e processa."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+    try:
+        mes_ref = request.form.get("mes_ref") or None
+        df = processar_devolucoes_relatorio(request.files["arquivo"].read(), mes_ref=mes_ref)
+        return jsonify({"success": True, "message": f"Devoluções processadas: {len(df)} linhas."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("Devoluções (Entregas Frustradas)", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 
