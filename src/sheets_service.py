@@ -130,7 +130,11 @@ def atualizar_status_arquivo(nome_arquivo, status, detalhes=""):
     def _atualizar():
         sh = get_sheet()
         from datetime import datetime
-        agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+        try:
+            import pytz
+            agora = datetime.now(pytz.timezone("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            agora = datetime.now().strftime("%d/%m/%Y %H:%M")
 
         try:
             ws = sh.worksheet("status_arquivos")
