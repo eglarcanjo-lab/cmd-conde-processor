@@ -214,9 +214,16 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     - faltas: produtos com falta registrada
     - devolucoes: devoluções por PDV
     """
+    import gc
     print("📂 Processando pedidos...")
     df = ler_csv_inf(conteudo_bytes)
     df.columns = [c.strip() for c in df.columns]
+
+    # ── Memória: mantém só as colunas usadas (CSV do Promax tem dezenas) ───────
+    COLS_USADAS = ["Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
+                   "Nome Prod.", "Volume Entrega", "Motivo", "Desc Tipo Movimento"]
+    df = df[[c for c in COLS_USADAS if c in df.columns]].copy()
+    gc.collect()
 
     # Normalizar setor
     df["_setor"] = df["Setor"].apply(normalizar_setor)
@@ -230,24 +237,20 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     df_prods_base = ler_aba("produtos_base")
     mapa_produtos = carregar_base_produtos(df_prods_base) if not df_prods_base.empty else {}
 
-    # Resolver categoria de cada linha
-    def get_cats(row):
-        """Retorna lista de categorias — SOMENTE da produtos_base cadastrada pelo admin."""
-        cod_raw = str(row.get("Cod. Prod.", "")).strip()
-        cod = cod_raw.lstrip("0") or "0"  # normaliza zeros à esquerda para bater com produtos_base
-        cats_sheet = mapa_produtos.get(cod)
-        if cats_sheet and isinstance(cats_sheet, list):
-            return cats_sheet
-        return []  # Sem categoria cadastrada = não contabiliza
-
-    df["_categorias"] = df.apply(get_cats, axis=1)
-    # Para compatibilidade: _categoria = primeira categoria da lista
-    df["_categoria"] = df["_categorias"].apply(lambda x: x[0] if x else None)
+    # ── Resolver categoria — VETORIZADO (map em vez de apply axis=1) ───────────
+    # mapa_produtos: cod_normalizado -> lista de categorias
+    cod_norm = df["Cod. Prod."].astype(str).str.strip().str.lstrip("0").replace("", "0")
+    df["_categorias"] = cod_norm.map(mapa_produtos)
+    df["_categorias"] = df["_categorias"].apply(lambda x: x if isinstance(x, list) else [])
+    df["_categoria"]  = df["_categorias"].apply(lambda x: x[0] if x else None)
+    del cod_norm
+    gc.collect()
 
     # Normalizar volume
-    df["_volume"] = df["Volume Entrega"].str.replace(",", ".").apply(
-        lambda x: float(x) if x.strip() != "" else 0.0
-    )
+    df["_volume"] = pd.to_numeric(
+        df["Volume Entrega"].astype(str).str.replace(",", ".", regex=False).str.strip(),
+        errors="coerce"
+    ).fillna(0.0)
 
     # Normalizar cod cliente
     df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0").str.strip()
@@ -257,36 +260,51 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     mes_anterior = (mes_atual - pd.DateOffset(months=1)).date()
     quatro_meses_atras = (mes_atual - pd.DateOffset(months=4)).date()
 
-    df_mes_atual = df[df["_data"].dt.date >= mes_atual]
-    df_mes_ant = df[(df["_data"].dt.date >= mes_anterior) & (df["_data"].dt.date < mes_atual)]
-    df_4m = df[df["_data"].dt.date >= quatro_meses_atras]
+    _datas = df["_data"].dt.date
+    df_mes_atual = df[_datas >= mes_atual]
+    df_mes_ant = df[(_datas >= mes_anterior) & (_datas < mes_atual)]
+    df_4m = df[_datas >= quatro_meses_atras]
+    del _datas
 
     # ── Cobertura ─────────────────────────────────────────────────────────────
     _processar_cobertura(df_mes_atual, df_mes_ant, df_clientes_base)
+    del df_mes_ant
+    gc.collect()
 
     # ── PDV Mix (últimos 4 meses) ─────────────────────────────────────────────
     _processar_mix(df_4m)
+    gc.collect()
 
     # ── Rank clientes ─────────────────────────────────────────────────────────
     _processar_rank(df_4m)
+    del df_4m
+    gc.collect()
 
     # ── Volume RV (mês atual — para cálculo de remuneração) ───────────────────
     processar_volume_rv(df_mes_atual, date.today().strftime("%Y-%m"))
+    del df_mes_atual
+    gc.collect()
 
     # ── Faltas ────────────────────────────────────────────────────────────────
     _processar_faltas(df)
+    gc.collect()
 
     # ── Devoluções ────────────────────────────────────────────────────────────
     _processar_devolucoes(df)
+    gc.collect()
 
     # ── Volume Diário ─────────────────────────────────────────────────────────
     _processar_volume_diario(df)
+    gc.collect()
 
     # ── Produtos sem categoria ────────────────────────────────────────────────
     _registrar_sem_categoria(df, mapa_produtos)
 
-    atualizar_status_arquivo("03014701 (Pedidos)", "✅ OK", f"{len(df)} linhas processadas")
-    print(f"  ✅ Pedidos processados: {len(df)} linhas")
+    n_linhas = len(df)
+    del df
+    gc.collect()
+    atualizar_status_arquivo("03014701 (Pedidos)", "✅ OK", f"{n_linhas} linhas processadas")
+    print(f"  ✅ Pedidos processados: {n_linhas} linhas")
 
 
 def _processar_cobertura(df_atual, df_ant, df_clientes):
