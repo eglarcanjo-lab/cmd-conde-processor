@@ -3,7 +3,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_produtos_full
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -259,6 +259,23 @@ def upload_ambos():
             traceback.print_exc()
             resultados["devolucoes"] = f"❌ Erro: {str(e)[:100]}"
 
+    # Base completa de produtos (nomes + HL) ANTES da grade (a grade usa o join)
+    if "produtos_full" in arquivos:
+        try:
+            df_pf = processar_produtos_full(arquivos["produtos_full"].read())
+            resultados["produtos_full"] = f"✅ {len(df_pf)} produtos na base"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["produtos_full"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "grade" in arquivos:
+        try:
+            df_g = processar_grade_estoque(arquivos["grade"].read())
+            resultados["grade"] = f"✅ {len(df_g)} itens em estoque"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["grade"] = f"❌ Erro: {str(e)[:100]}"
+
     if "pedidos" in arquivos:
         try:
             processar_pedidos(
@@ -332,6 +349,38 @@ def upload_devolucoes():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("Devoluções (Entregas Frustradas)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/produtos-full", methods=["POST"])
+def upload_produtos_full():
+    """Base completa de produtos (nomes + HL por caixa)."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+    try:
+        df = processar_produtos_full(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Base de produtos: {len(df)} produtos."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("Base Produtos (nomes + HL)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/grade", methods=["POST"])
+def upload_grade():
+    """Grade de estoque (saldo Disp por produto)."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+    try:
+        df = processar_grade_estoque(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Grade de estoque: {len(df)} itens."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("Grade de Estoque", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 

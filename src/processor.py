@@ -1056,6 +1056,97 @@ def processar_produtos_base(conteudo_bytes):
     return df_final
 
 
+def processar_produtos_full(conteudo_bytes):
+    """Base COMPLETA de produtos (todos, não só os vendidos) — nome completo +
+    HL por caixa (coluna P = 'Fator Hecto Comercial'). Referência para a Grade de
+    Estoque e para o Shelf. Layout posicional do export:
+      0 Código · 1 Descrição · 6 Embalagem · 15 Fator Hecto Comercial (HL/caixa)
+    Gera a aba produtos_full: cod, nome, hl_caixa, embalagem.
+    """
+    print("📂 Processando base completa de produtos (nomes + HL/caixa)...")
+    df = ler_csv_inf(conteudo_bytes)
+    cols = list(df.columns)
+    if len(cols) < 16:
+        raise ValueError(f"Base de produtos com estrutura inesperada: {len(cols)} colunas.")
+
+    def col(i):
+        return df[cols[i]].astype(str).str.strip()
+
+    out = pd.DataFrame({
+        "cod":       col(0).str.lstrip("0"),
+        "nome":      col(1),
+        "embalagem": col(6),
+        "hl_caixa":  col(15),
+    })
+    out["hl_caixa"] = pd.to_numeric(
+        out["hl_caixa"].str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+        errors="coerce",
+    ).fillna(0.0).round(6)
+    # Remove inválidos/não cadastrados
+    out = out[(out["nome"] != "") & (~out["nome"].str.match(r"^0000\.0"))]
+    out = out.drop_duplicates(subset=["cod"])
+    sobrescrever_aba("produtos_full", out)
+    atualizar_status_arquivo("Base Produtos (nomes + HL)", "✅ OK", f"{len(out)} produtos")
+    print(f"  ✅ produtos_full: {len(out)} produtos")
+    return out
+
+
+def processar_grade_estoque(conteudo_bytes):
+    """Grade de estoque (saldo Disp por produto) — atualizada ~3x/dia.
+    Layout posicional: 0 Grade · 1 Cod · 2 Descricao · 3 UN · 9 Saidas · 11 Disp.
+    Junta com produtos_full p/ trazer o nome completo + HL por caixa.
+    Gera a aba grade_estoque (só itens com saldo > 0).
+    """
+    print("📂 Processando grade de estoque...")
+    df = ler_csv_inf(conteudo_bytes)
+    cols = list(df.columns)
+    if len(cols) < 12:
+        raise ValueError(f"Grade de estoque com estrutura inesperada: {len(cols)} colunas.")
+
+    def col(i):
+        return df[cols[i]].astype(str).str.strip()
+
+    def to_int(s):
+        return pd.to_numeric(s.str.replace(r"\D", "", regex=True), errors="coerce").fillna(0).astype(int)
+
+    g = pd.DataFrame({
+        "grade":     col(0),
+        "cod":       col(1).str.lstrip("0"),
+        "descricao": col(2),
+        "un":        col(3),
+        "saidas":    to_int(col(9)),
+        "saldo":     to_int(col(11)),   # Disp. = saldo atual
+    })
+    g = g[g["saldo"] > 0].copy()
+
+    # Junta nome completo + HL/caixa da base
+    try:
+        pf = ler_aba("produtos_full")
+    except Exception:
+        pf = pd.DataFrame()
+    mapa_nome, mapa_hl = {}, {}
+    if not pf.empty and "cod" in pf.columns:
+        for _, r in pf.iterrows():
+            c = str(r.get("cod", "")).strip()
+            if not c:
+                continue
+            mapa_nome[c] = str(r.get("nome", "")).strip()
+            try:
+                mapa_hl[c] = float(str(r.get("hl_caixa", 0)).replace(",", ".") or 0)
+            except Exception:
+                mapa_hl[c] = 0.0
+
+    g["nome"] = g["cod"].map(mapa_nome).fillna(g["descricao"])
+    g["hl_caixa"] = g["cod"].map(mapa_hl).fillna(0.0)
+    g["hl_estoque"] = (g["saldo"] * g["hl_caixa"]).round(3)
+    g = g.sort_values("saldo", ascending=False)
+
+    sobrescrever_aba("grade_estoque", g[["grade", "cod", "nome", "descricao", "un", "saldo", "saidas", "hl_caixa", "hl_estoque"]])
+    sem_nome = int((g["nome"] == g["descricao"]).sum())
+    atualizar_status_arquivo("Grade de Estoque", "✅ OK", f"{len(g)} itens · {round(g['hl_estoque'].sum(),1)} HL")
+    print(f"  ✅ grade_estoque: {len(g)} itens · {sem_nome} sem nome na base · {round(g['hl_estoque'].sum(),1)} HL")
+    return g
+
 
 def processar_faturamento_mktp(conteudo_bytes):
     """
