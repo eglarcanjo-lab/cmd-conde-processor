@@ -1005,6 +1005,13 @@ def processar_produtos_base(conteudo_bytes):
     df = ler_csv_inf(conteudo_bytes)
     df.columns = [c.strip() for c in df.columns]
 
+    # Gera a aba produtos_full (TODOS os produtos + HL/caixa) a partir do MESMO
+    # 0111 — base de nomes e HL para a Grade de Estoque e o Shelf.
+    try:
+        _gerar_produtos_full(df)
+    except Exception as e:
+        print(f"  ⚠️ Não consegui gerar produtos_full: {e}")
+
     # Monta dicionário cod → dados completos do 0111
     df["_cod"] = df["Código"].str.strip().str.lstrip("0")
     df["_nome"] = df["Descrição"].str.strip()
@@ -1056,38 +1063,31 @@ def processar_produtos_base(conteudo_bytes):
     return df_final
 
 
-def processar_produtos_full(conteudo_bytes):
-    """Base COMPLETA de produtos (todos, não só os vendidos) — nome completo +
-    HL por caixa (coluna P = 'Fator Hecto Comercial'). Referência para a Grade de
-    Estoque e para o Shelf. Layout posicional do export:
-      0 Código · 1 Descrição · 6 Embalagem · 15 Fator Hecto Comercial (HL/caixa)
-    Gera a aba produtos_full: cod, nome, hl_caixa, embalagem.
+def _gerar_produtos_full(df):
+    """A partir do DataFrame do 0111 (já lido), gera a aba produtos_full com
+    TODOS os produtos + HL por caixa (coluna 'Fator Hecto Comercial', col P).
+    Base de nomes/HL para a Grade de Estoque e o Shelf.
     """
-    print("📂 Processando base completa de produtos (nomes + HL/caixa)...")
-    df = ler_csv_inf(conteudo_bytes)
     cols = list(df.columns)
-    if len(cols) < 16:
-        raise ValueError(f"Base de produtos com estrutura inesperada: {len(cols)} colunas.")
-
-    def col(i):
-        return df[cols[i]].astype(str).str.strip()
+    # Acha 'Fator Hecto Comercial' pelo nome (tolerante a encoding); senão usa pos 15
+    col_hl = next((c for c in cols if "hecto" in c.lower() and "comerc" in c.lower()), None)
+    if col_hl is None and len(cols) > 15:
+        col_hl = cols[15]
 
     out = pd.DataFrame({
-        "cod":       col(0).str.lstrip("0"),
-        "nome":      col(1),
-        "embalagem": col(6),
-        "hl_caixa":  col(15),
+        "cod":       df["Código"].astype(str).str.strip().str.lstrip("0"),
+        "nome":      df["Descrição"].astype(str).str.strip(),
+        "embalagem": df.get("Embalagem", pd.Series("", index=df.index)).astype(str).str.strip(),
+        "hl_caixa":  df[col_hl].astype(str).str.strip() if col_hl else "0",
     })
     out["hl_caixa"] = pd.to_numeric(
-        out["hl_caixa"].str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+        out["hl_caixa"].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
         errors="coerce",
     ).fillna(0.0).round(6)
-    # Remove inválidos/não cadastrados
     out = out[(out["nome"] != "") & (~out["nome"].str.match(r"^0000\.0"))]
     out = out.drop_duplicates(subset=["cod"])
     sobrescrever_aba("produtos_full", out)
-    atualizar_status_arquivo("Base Produtos (nomes + HL)", "✅ OK", f"{len(out)} produtos")
-    print(f"  ✅ produtos_full: {len(out)} produtos")
+    print(f"  ✅ produtos_full: {len(out)} produtos (do 0111, col HL='{col_hl}')")
     return out
 
 
