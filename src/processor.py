@@ -334,21 +334,29 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
 
 
 def _processar_vendas_cliente(df_mes):
-    """Vendas do mês por setor x cliente x produto (base de perguntas da Hop).
-    Gera a aba vendas_cliente_produto, usada pela assistente para responder
-    perguntas tipo 'qual cliente comprou mais X esse mês'."""
-    df_v = df_mes[df_mes["_volume"] > 0].copy()
+    """Vendas do mês por setor x cliente x produto. Base da assistente Hop e da
+    Cobertura & Distribuição por SKU.
+    Regra do DIA ATUAL: hoje usa Volume Marcação (ainda não há faturamento);
+    dias anteriores usam Volume Entrega — mesma lógica do Volume Diário."""
+    cols_vazio = ["setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "volume_hl", "mes_referencia"]
+    hoje_str = date.today().strftime("%d/%m/%Y")
+    d = df_mes.copy()
+    d["_data_str"] = d["_data"].dt.strftime("%d/%m/%Y")
+    eh_hoje = d["_data_str"] == hoje_str
+    d["_vol_efetivo"] = d["_volume"]
+    d.loc[eh_hoje, "_vol_efetivo"] = d.loc[eh_hoje, "_volume_marcacao"]
+
+    df_v = d[d["_vol_efetivo"] > 0].copy()
     if df_v.empty:
-        sobrescrever_aba("vendas_cliente_produto", pd.DataFrame(
-            columns=["setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "volume_hl", "mes_referencia"]))
+        sobrescrever_aba("vendas_cliente_produto", pd.DataFrame(columns=cols_vazio))
         return
     mes_ref = date.today().strftime("%Y-%m")
     g = (
-        df_v.groupby(["_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod."])["_volume"]
+        df_v.groupby(["_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod."])["_vol_efetivo"]
         .sum().reset_index()
         .rename(columns={
             "_setor": "setor", "_cod_pdv": "cod_pdv", "Nome Cliente": "nome_pdv",
-            "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto", "_volume": "volume_hl",
+            "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto", "_vol_efetivo": "volume_hl",
         })
         .sort_values(["setor", "volume_hl"], ascending=[True, False])
     )
