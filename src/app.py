@@ -1,4 +1,7 @@
 import os
+import io
+import re
+import zipfile
 import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -692,6 +695,147 @@ def upload_spo_ap():
         traceback.print_exc()
         atualizar_status_arquivo("SPO - Atendimento Produtivo", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
+
+
+# ─── AUTO-IMPORT POR ZIP (e-mail/Apps Script) ───────────────────────────────
+# Recebe 1 .zip com vários relatórios e detecta o tipo de cada um PELO NOME:
+#  • Promax: número da rotina no nome (03014701, 0111, ...)
+#  • BI: "#<item>" (#1, #5, #7, ...) · "task" → Tasks · "pontos"/"bees" → Pontos Bees
+ROTINAS = {
+    "0105070402": "clientes", "03014701": "pedidos", "0111": "produtos_base",
+    "030509": "faturamento_mktp", "120601": "inadimplencia", "030204": "devolucoes",
+    "020304": "grade",
+}
+ITENS_BI = {
+    "1": "spo_visitacao_gv", "2": "spo_coaching", "5": "spo_ap", "6": "spo_dto",
+    "7": "spo_promo", "12": "spo_score5", "19": "spo_alone", "20": "spo_rgb",
+    "21": "spo_cupons", "22": "spo_loja_ideal", "23": "spo_scanntech", "24": "spo_portfolio_ideal",
+}
+ORDEM = ["clientes", "produtos_base", "faturamento_mktp", "pontos_bees",
+         "spo_visitacao_gv", "spo_coaching", "spo_dto", "spo_promo", "spo_score5",
+         "spo_alone", "spo_rgb", "spo_cupons", "spo_loja_ideal", "spo_scanntech",
+         "spo_portfolio_ideal", "spo_ap", "tasks", "inadimplencia", "devolucoes",
+         "pedidos", "grade"]
+
+
+def detectar_tipo(nome):
+    base = str(nome).rsplit("/", 1)[-1]
+    low = base.lower()
+    if "task" in low:
+        return "tasks"
+    if "ponto" in low or "bees" in low:
+        return "pontos_bees"
+    m = re.search(r"#\s*(\d+)", base)
+    if m and m.group(1) in ITENS_BI:
+        return ITENS_BI[m.group(1)]
+    # Promax: dígitos do começo do nome (antes de _ ou espaço), ignorando pontos
+    prefixo = re.split(r"[ _]", base)[0]
+    digs = re.sub(r"\D", "", prefixo)
+    if digs:
+        if digs in ROTINAS:
+            return ROTINAS[digs]
+        for rot in sorted(ROTINAS, key=len, reverse=True):
+            if digs.startswith(rot):
+                return ROTINAS[rot]
+    return None
+
+
+@app.route("/api/processar/zip", methods=["POST"])
+def upload_zip():
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o zip no campo 'arquivo'."}), 400
+    mes_ref = request.form.get("mes_ref") or None
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(request.files["arquivo"].read()))
+    except Exception as e:
+        return jsonify({"error": f"Arquivo não é um .zip válido: {e}"}), 400
+
+    por_campo, ignorados = {}, []
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        nome = info.filename.rsplit("/", 1)[-1]
+        if not nome or nome.startswith(".") or nome.startswith("__MACOSX"):
+            continue
+        tipo = detectar_tipo(info.filename)
+        if tipo:
+            por_campo[tipo] = zf.read(info)  # se repetir o tipo, o último vence
+        else:
+            ignorados.append(nome)
+
+    resultados = {}
+    df_clientes = None
+    precisa_rv = False
+    for campo in ORDEM:
+        if campo not in por_campo:
+            continue
+        b = por_campo[campo]
+        try:
+            if campo == "clientes":
+                df_clientes = processar_clientes(b)
+            elif campo == "produtos_base":
+                processar_produtos_base(b)
+            elif campo == "faturamento_mktp":
+                processar_faturamento_mktp(b); precisa_rv = True
+            elif campo == "pontos_bees":
+                processar_pontos_bees(b); precisa_rv = True
+            elif campo == "spo_visitacao_gv":
+                processar_visitacao_gv(b, mes_ref=mes_ref)
+            elif campo == "spo_coaching":
+                processar_rota_coaching(b)
+            elif campo == "spo_dto":
+                processar_dto_gc(b, mes_ref=mes_ref)
+            elif campo == "spo_promo":
+                processar_aba_promocao(b, mes_ref=mes_ref)
+            elif campo == "spo_score5":
+                processar_score5(b, mes_ref=mes_ref)
+            elif campo == "spo_alone":
+                processar_pedido_alone(b, mes_ref=mes_ref)
+            elif campo == "spo_rgb":
+                processar_rgb(b, mes_ref=mes_ref)
+            elif campo == "spo_cupons":
+                processar_cupons_digitais(b, mes_ref=mes_ref)
+            elif campo == "spo_loja_ideal":
+                processar_loja_ideal(b, mes_ref=mes_ref)
+            elif campo == "spo_scanntech":
+                processar_scanntech(b, mes_ref=mes_ref)
+            elif campo == "spo_portfolio_ideal":
+                processar_portfolio_ideal(b, mes_ref=mes_ref)
+            elif campo == "spo_ap":
+                processar_atendimento_produtivo(b, mes_ref=mes_ref); precisa_rv = True
+            elif campo == "tasks":
+                processar_tasks(b)
+                try:
+                    calcular_todos_spo_tasks()
+                except Exception as e:
+                    print(f"  ⚠️ SPO tasks: {e}")
+            elif campo == "inadimplencia":
+                processar_inadimplencia(b)
+            elif campo == "devolucoes":
+                processar_devolucoes_relatorio(b, mes_ref=mes_ref)
+            elif campo == "pedidos":
+                dfc = df_clientes
+                if dfc is None or dfc.empty:
+                    dfc = ler_aba("pdv_base")
+                processar_pedidos(b, dfc if dfc is not None and not dfc.empty else None)
+                precisa_rv = True
+            elif campo == "grade":
+                processar_grade_estoque(b)
+            resultados[campo] = "✅ OK"
+        except Exception as e:
+            traceback.print_exc()
+            resultados[campo] = f"❌ Erro: {str(e)[:120]}"
+
+    if precisa_rv:
+        try:
+            calcular_rv_completa()
+            resultados["rv_recalculada"] = "✅ OK"
+        except Exception as e:
+            resultados["rv_recalculada"] = f"⚠️ {str(e)[:100]}"
+
+    return jsonify({"success": True, "processados": resultados, "ignorados": ignorados})
 
 
 if __name__ == "__main__":
