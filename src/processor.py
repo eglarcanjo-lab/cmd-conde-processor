@@ -2514,16 +2514,42 @@ META_SCORE5 = 46  # % — ajustar quando metas oficiais chegarem
 
 def processar_score5(conteudo_bytes, mes_ref=None):
     """
-    Processa o relatório ON_TRADE (Score 5 / Faturamento).
-    Todos os PDVs do relatório são Score 5.
-    BATEU META == 1 → task validada.
-    Gera aba: spo_score5_resumo
-    Colunas resultado: setor | pdvs_total | pdvs_ok | pct | meta | ok | mes_referencia
+    Processa o relatório de Task de Faturamento (Score 5 / SPO Item 12).
+    Base "task fat": cada linha é um PDV. A coluna **TASK FAT** (col T) marca
+    com "1" quando o PDV bateu a task de faturamento.
+      realizado (pdvs_ok) = nº de PDVs com TASK FAT == 1
+      universo (pdvs_total) = PDVs que POSSUEM task de fat (POSSUI TASK == 1);
+        se a coluna não existir/vier vazia, cai para o total de PDVs do relatório.
+    Gera duas abas:
+      - spo_score5_resumo  : setor | pdvs_total | pdvs_ok | pct | sem_task | meta | ok | mes_referencia
+      - spo_score5_detalhe : setor | cod_pdv | nome_pdv | bateu | possui_task |
+                             meta_task | real_task | mes_referencia (1 linha por PDV com task)
     """
     import io as _io
-    print("📂 Processando Score 5 / Tasks Faturamento (SPO Item 12)...")
+    print("📂 Processando Score 5 / Task de Faturamento (SPO Item 12)...")
 
     SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+
+    def _col(df, *nomes, pos=None):
+        """Acha uma coluna por nome (case-insensitive, ignora espaços); fallback posicional."""
+        norm = {str(c).strip().upper(): c for c in df.columns}
+        for n in nomes:
+            c = norm.get(n.strip().upper())
+            if c is not None:
+                return c
+        if pos is not None and pos < len(df.columns):
+            return df.columns[pos]
+        return None
+
+    def _um(v):
+        """True quando o valor representa 1 (aceita '1', '1.0', 1, 'sim')."""
+        s = str(v).strip().lower()
+        if s in ("1", "1.0", "sim", "s", "true"):
+            return True
+        try:
+            return int(float(s)) == 1
+        except Exception:
+            return False
 
     try:
         try:
@@ -2531,56 +2557,80 @@ def processar_score5(conteudo_bytes, mes_ref=None):
         except Exception:
             df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
 
-        df.columns = [c.strip() for c in df.columns]
+        df.columns = [str(c).strip() for c in df.columns]
 
-        # Normaliza setor (coluna RN)
-        df["_setor"] = df["RN"].apply(normalizar_setor)
+        c_rn      = _col(df, "RN", "Setor VDE", "Setor", pos=5)
+        c_pdv     = _col(df, "CHAVE PDV", "Chave PDV", "COD PDV", pos=6)
+        c_nome    = _col(df, "NOME PDV", "Nome PDV", "RAZAO SOCIAL", pos=8)
+        c_taskfat = _col(df, "TASK FAT", "BATEU META", pos=19)
+        c_possui  = _col(df, "POSSUI TASK", "POSSUI TASK FAT")
+        c_meta    = _col(df, "META TASK")
+        c_real    = _col(df, "REAL TASK")
+
+        df["_setor"] = df[c_rn].apply(normalizar_setor)
         df = df[df["_setor"].isin(SETORES_LOCAL)]
+        df = df[df[c_pdv].notna() & (df[c_pdv].astype(str).str.strip() != "")]
 
-        # Remove linhas sem CHAVE PDV
-        df = df[df["CHAVE PDV"].notna() & (df["CHAVE PDV"].str.strip() != "")]
-
-        # BATEU META: 1 = OK
-        df["_ok"] = df["BATEU META"].astype(str).str.strip() == "1"
+        df["_bateu"]  = df[c_taskfat].apply(_um)
+        df["_possui"] = df[c_possui].apply(_um) if c_possui else True
+        # PDV com task = POSSUI TASK==1; quem bateu (TASK FAT==1) também conta como tendo task
+        df["_comtask"] = df["_possui"] | df["_bateu"]
 
         mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes")
-        resumo = []
 
+        def _base(grp):
+            """Universo do KPI: PDVs com task; se nenhum marcado, usa total do relatório."""
+            ct = int(grp["_comtask"].sum())
+            return ct if ct > 0 else len(grp)
+
+        resumo, detalhe = [], []
         for setor in sorted(df["_setor"].unique()):
-            grp = df[df["_setor"] == setor]
-            total = len(grp)
-            ok    = int(grp["_ok"].sum())
-            pct   = round(ok / total * 100, 1) if total > 0 else 0
+            grp   = df[df["_setor"] == setor]
+            base  = _base(grp)
+            ok    = int(grp["_bateu"].sum())
+            pct   = round(ok / base * 100, 1) if base > 0 else 0
             resumo.append({
-                "setor":          setor,
-                "pdvs_total":     total,
-                "pdvs_ok":        ok,
-                "pct":            pct,
-                "meta":           META_SCORE5,
-                "ok":             "OK" if pct >= META_SCORE5 else "NOK",
+                "setor": setor, "pdvs_total": base, "pdvs_ok": ok, "pct": pct,
+                "sem_task": int((~grp["_comtask"]).sum()),
+                "meta": META_SCORE5, "ok": "OK" if pct >= META_SCORE5 else "NOK",
                 "mes_referencia": mes_ref,
             })
-            print(f"  Setor {setor}: {ok}/{total} ({pct}%)")
+            # Detalhe: só PDVs com task (acionável)
+            comtask = grp[grp["_comtask"]]
+            for _, r in comtask.iterrows():
+                detalhe.append({
+                    "setor": setor,
+                    "cod_pdv": str(r[c_pdv]).strip(),
+                    "nome_pdv": (str(r[c_nome]).strip() if c_nome else ""),
+                    "bateu": "Sim" if r["_bateu"] else "Não",
+                    "possui_task": "Sim" if r["_possui"] else "Não",
+                    "meta_task": (str(r[c_meta]).strip() if c_meta else ""),
+                    "real_task": (str(r[c_real]).strip() if c_real else ""),
+                    "mes_referencia": mes_ref,
+                })
+            print(f"  Setor {setor}: {ok}/{base} ({pct}%)")
 
-        # Total operação
-        total_op = len(df)
-        ok_op    = int(df["_ok"].sum())
-        pct_op   = round(ok_op / total_op * 100, 1) if total_op > 0 else 0
+        base_op = _base(df)
+        ok_op   = int(df["_bateu"].sum())
+        pct_op  = round(ok_op / base_op * 100, 1) if base_op > 0 else 0
         resumo.append({
-            "setor":          "OPERACAO",
-            "pdvs_total":     total_op,
-            "pdvs_ok":        ok_op,
-            "pct":            pct_op,
-            "meta":           META_SCORE5,
-            "ok":             "OK" if pct_op >= META_SCORE5 else "NOK",
+            "setor": "OPERACAO", "pdvs_total": base_op, "pdvs_ok": ok_op, "pct": pct_op,
+            "sem_task": int((~df["_comtask"]).sum()),
+            "meta": META_SCORE5, "ok": "OK" if pct_op >= META_SCORE5 else "NOK",
             "mes_referencia": mes_ref,
         })
 
         df_resumo = pd.DataFrame(resumo)
+        # Detalhe ordenado: setor, depois "Não" antes de "Sim"
+        df_det = pd.DataFrame(detalhe)
+        if not df_det.empty:
+            df_det["_ord"] = (df_det["bateu"] == "Sim").astype(int)
+            df_det = df_det.sort_values(["setor", "_ord", "nome_pdv"]).drop(columns=["_ord"])
         sobrescrever_aba("spo_score5_resumo", df_resumo)
+        sobrescrever_aba("spo_score5_detalhe", df_det)
         atualizar_status_arquivo("SPO - Score 5 (ON_TRADE)", "✅ OK",
-                                 f"Operação: {pct_op}% ({ok_op}/{total_op} PDVs)")
-        print(f"  ✅ Score 5: {pct_op}% operação ({ok_op}/{total_op} PDVs)")
+                                 f"Operação: {ok_op}/{base_op} PDVs ({pct_op}%) bateram a task de fat")
+        print(f"  ✅ Score 5: {pct_op}% operação ({ok_op}/{base_op} PDVs com task) · detalhe: {len(df_det)} linhas")
         return df_resumo
 
     except Exception as e:
