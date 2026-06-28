@@ -3,7 +3,7 @@ services:
     name: cmd-conde-processor
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --chdir src app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
+    startCommand: MALLOC_ARENA_MAX=2 gunicorn --chdir src app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 300
     envVars:
       - key: GOOGLE_SHEET_ID
         sync: false
