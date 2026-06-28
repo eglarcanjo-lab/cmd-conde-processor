@@ -48,6 +48,10 @@ def _eh_quota_429(e):
 def _handle_erro(e):
     """Qualquer erro não tratado: quota do Sheets vira mensagem clara (429);
     o resto vira 500 com a mensagem encurtada — nunca HTML cru pro Node."""
+    # Erros HTTP normais (404, 405, etc.) passam direto — não viram 500.
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        return e
     traceback.print_exc()
     if _eh_quota_429(e):
         return jsonify({
