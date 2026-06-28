@@ -173,10 +173,6 @@ def processar_clientes(conteudo_bytes):
     # ── Aba pdv_base ─────────────────────────────────────────────────────────
     sobrescrever_aba("pdv_base", df_base)
 
-    # ── Aba visitas_hoje ─────────────────────────────────────────────────────
-    df_hoje = df_base[df_base["visita_hoje"] == "1"].copy()
-    sobrescrever_aba("visitas_hoje", df_hoje)
-
     # ── Aba inadimplentes ────────────────────────────────────────────────────
     df_inad = df_base[df_base["inadimplente"] == "1"].copy()
     df_inad = df_inad.sort_values("titulos_pendentes", ascending=False)
@@ -299,10 +295,6 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     del df_mes_atual
     gc.collect()
 
-    # ── Faltas ────────────────────────────────────────────────────────────────
-    _processar_faltas(df)
-    gc.collect()
-
     # ── Entregas efetivadas (setor x mês — Detalhamento HOP › Entrega) ────────
     _processar_entregas_efetivadas(df)
     gc.collect()
@@ -313,10 +305,6 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
 
     # ── Itens das notas frustradas (para abrir o pedido na aba Entrega) ───────
     _processar_nota_itens(df)
-    gc.collect()
-
-    # ── Devoluções ────────────────────────────────────────────────────────────
-    _processar_devolucoes(df)
     gc.collect()
 
     # ── Volume Diário ─────────────────────────────────────────────────────────
@@ -555,19 +543,6 @@ def _processar_rank(df_4m):
     sobrescrever_aba("rank_clientes", rank)
 
 
-def _processar_faltas(df):
-    """PDVs com falta registrada (Motivo contém FALTA)."""
-    df_falta = df[df["Motivo"].str.upper().str.contains("FALTA", na=False)].copy()
-    faltas = (
-        df_falta.groupby(["_setor", "Cod. Prod.", "Nome Prod.", "_categoria"])
-        .size()
-        .reset_index(name="qtd_faltas")
-        .rename(columns={"Cod. Prod.": "cod_prod", "Nome Prod.": "nome_prod", "_categoria": "categoria", "_setor": "setor"})
-        .sort_values("qtd_faltas", ascending=False)
-    )
-    sobrescrever_aba("faltas", faltas)
-
-
 def _processar_volume_diario(df):
     """Agrega volume por data x setor x produto (para Volume Diário).
 
@@ -653,8 +628,6 @@ def processar_devolucoes_relatorio(conteudo_bytes, mes_ref=None):
     if out.empty:
         sobrescrever_aba("entregas_frustradas", pd.DataFrame(columns=[
             "setor","data","nota","cod_pdv","nome_pdv","placa","valor","volume_hl","data_devol","cod_motivo","desc_motivo","mes_referencia"]))
-        sobrescrever_aba("entregas_resumo_motivo", pd.DataFrame(columns=[
-            "setor","desc_motivo","qtd","volume_hl","valor","mes_referencia"]))
         atualizar_status_arquivo("Devoluções (Entregas Frustradas)", "⚠️ Sem dados", "Nenhum setor válido")
         print("  ⚠️ Devoluções: nenhuma linha válida")
         return out
@@ -681,33 +654,10 @@ def processar_devolucoes_relatorio(conteudo_bytes, mes_ref=None):
     out = out.sort_values(["mes_referencia", "setor", "data"])
     sobrescrever_aba("entregas_frustradas", out)
 
-    resumo = (
-        out.groupby(["setor", "desc_motivo", "mes_referencia"])
-        .agg(qtd=("volume_hl", "size"), volume_hl=("volume_hl", "sum"), valor=("valor", "sum"))
-        .reset_index()
-        .sort_values(["setor", "volume_hl"], ascending=[True, False])
-    )
-    resumo["volume_hl"] = resumo["volume_hl"].round(3)
-    resumo["valor"] = resumo["valor"].round(2)
-    sobrescrever_aba("entregas_resumo_motivo", resumo)
-
     meses_lbl = ", ".join(sorted(out["mes_referencia"].unique()))
     atualizar_status_arquivo("Devoluções (Entregas Frustradas)", "✅ OK", f"{len(out)} devoluções · meses: {meses_lbl}")
     print(f"  ✅ Devoluções: {len(out)} linhas acumuladas · meses {meses_lbl}")
     return out
-
-
-def _processar_devolucoes(df):
-    """PDVs com devoluções (Desc Tipo Movimento contém DEVOL)."""
-    df_dev = df[df["Desc Tipo Movimento"].str.upper().str.contains("DEVOL", na=False)].copy()
-    devs = (
-        df_dev.groupby(["_setor", "_cod_pdv"])
-        ["_volume"].sum()
-        .reset_index()
-        .rename(columns={"_volume": "volume_devolvido_hl", "_cod_pdv": "cod_pdv", "_setor": "setor"})
-        .sort_values("volume_devolvido_hl", ascending=False)
-    )
-    sobrescrever_aba("devolucoes", devs)
 
 
 def _registrar_sem_categoria(df, mapa_produtos):
