@@ -165,6 +165,6 @@ def atualizar_status_arquivo(nome_arquivo, status, detalhes=""):
 # ── Backend de dados (flag reversível) ────────────────────────────────────────
 # DATA_BACKEND=sql → processador lê/grava no PostgreSQL (sql_service); senão, Sheets
 # (padrão). get_sheet() segue disponível para o ETL ler o Sheets. Reversível: troca a env.
-if os.environ.get("DATA_BACKEND", "sheets").lower() == "sql":
+if os.environ.get("DATA_BACKEND", "sheets").strip().lower() == "sql":
     print("📦 DATA_BACKEND=sql → processador usando PostgreSQL.")
     from sql_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo  # noqa: F401,F811
