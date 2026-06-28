@@ -274,6 +274,13 @@ def upload_ambos():
             traceback.print_exc()
             resultados["pedidos"] = f"❌ Erro: {str(e)[:100]}"
 
+    # Libera a memória das fases anteriores ANTES do recálculo de RV (que carrega
+    # cobertura ~20k). Sem isso, as duas fases pesadas somam RSS e estouram os 512MB
+    # do Render free (OOM mata o worker → 502/429). Um OOM não é capturável por except.
+    import gc
+    df_clientes = None
+    gc.collect()
+
     # Recalcula RV ao final se algum dado RV foi atualizado neste lote
     rv_keys = {"pedidos", "faturamento_mktp", "pontos_bees", "spo_ap"}
     if rv_keys & set(arquivos.keys()):
