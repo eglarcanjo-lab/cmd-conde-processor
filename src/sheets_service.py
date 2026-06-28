@@ -46,10 +46,13 @@ def get_sheet():
     return _sheet_cache
 
 
-def _com_retry(fn, max_tentativas=5, espera_inicial=10):
+def _com_retry(fn, max_tentativas=4, espera_inicial=4):
     """
     Executa fn com retry automático em caso de quota 429.
-    Espera exponencial: 10s, 20s, 40s, 80s, 160s.
+    Espera exponencial curta: 4s, 8s, 16s (máx ~28s por chamada). Mantida curta
+    de propósito: um import grande tem muitas escritas; backoff longo fazia o
+    request passar dos 300s, o frontend dava timeout e REENVIAVA tudo, dobrando a
+    carga e estourando a quota. Melhor falhar rápido com mensagem clara.
     """
     for tentativa in range(max_tentativas):
         try:
