@@ -71,22 +71,27 @@ def sobrescrever_aba(nome_aba, df):
         cols = [str(c).strip() for c in df.columns if str(c).strip() != ""]
         cols_l = [c.lower() for c in cols]
         cols_sql = ", ".join('"%s"' % c for c in cols_l)
-        rows = [tuple(_to_param(r[c]) for c in cols) for _, r in df.iterrows()] if cols else []
+        n = len(df) if cols else 0
+        # Gerador: não materializa a lista inteira de linhas (poupa memória em abas
+        # grandes; execute_values consome em lotes de page_size).
+        def _rows():
+            for t in df[cols].itertuples(index=False, name=None):
+                yield tuple(_to_param(v) for v in t)
 
         if nome_aba in CADASTRO:
             cur.execute('TRUNCATE TABLE "%s"' % nome_aba)
-            if rows:
+            if n:
                 execute_values(cur, 'INSERT INTO "%s" (%s) VALUES %%s ON CONFLICT DO NOTHING'
-                               % (nome_aba, cols_sql), rows, page_size=500)
+                               % (nome_aba, cols_sql), _rows(), page_size=500)
         else:
             cur.execute('DROP TABLE IF EXISTS "%s"' % nome_aba)
             defs = ", ".join('"%s" TEXT' % c for c in cols_l) or '"_vazio" TEXT'
             cur.execute('CREATE TABLE "%s" (%s)' % (nome_aba, defs))
-            if rows:
+            if n:
                 execute_values(cur, 'INSERT INTO "%s" (%s) VALUES %%s'
-                               % (nome_aba, cols_sql), rows, page_size=500)
+                               % (nome_aba, cols_sql), _rows(), page_size=500)
         conn.commit()
-        print("  ✅ [SQL] '%s': %d linhas" % (nome_aba, len(rows)))
+        print("  ✅ [SQL] '%s': %d linhas" % (nome_aba, n))
     finally:
         conn.close()
 
