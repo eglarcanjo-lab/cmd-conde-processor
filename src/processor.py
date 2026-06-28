@@ -185,7 +185,7 @@ def processar_clientes(conteudo_bytes):
     sobrescrever_aba("sem_compra", df_sc[["setor","cod_pdv","nome_fantasia","cidade","segmento","dias_sem_compra","ultima_compra","inadimplente"]])
 
     atualizar_status_arquivo("0105070402 (Clientes)", "✅ OK", f"{len(df_base)} PDVs processados")
-    print(f"  ✅ Clientes processados: {len(df_base)} PDVs, {len(df_hoje)} visitas hoje")
+    print(f"  ✅ Clientes processados: {len(df_base)} PDVs")
     return df_base
 
 
