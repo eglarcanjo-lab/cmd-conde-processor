@@ -18,10 +18,17 @@ CORS(app, origins=[
     "https://*.vercel.app",
 ])
 
-PROCESSOR_TOKEN = os.environ.get("PROCESSOR_TOKEN", "cmd_processor_secret")
+# Token obrigatório via env (sem default fixo no código — D1/D2 da Auditoria 2).
+# Se não estiver configurado, rejeita tudo com log claro (não derruba o serviço).
+PROCESSOR_TOKEN = os.environ.get("PROCESSOR_TOKEN")
+if not PROCESSOR_TOKEN:
+    print("⚠️ CRÍTICO: PROCESSOR_TOKEN não configurado — todas as requisições "
+          "serão rejeitadas (401). Defina a env var PROCESSOR_TOKEN no Render.")
 
 
 def verificar_token(req):
+    if not PROCESSOR_TOKEN:
+        return False
     token = req.headers.get("X-Processor-Token") or req.args.get("token")
     return token == PROCESSOR_TOKEN
 
