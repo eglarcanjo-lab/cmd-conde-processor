@@ -11,5 +11,9 @@ services:
         sync: false
       - key: GOOGLE_PRIVATE_KEY
         sync: false
-      - key: PROCESSOR_SECRET
+      # Atenção: o código lê PROCESSOR_TOKEN (o antigo PROCESSOR_SECRET está obsoleto).
+      - key: PROCESSOR_TOKEN
+        sync: false
+      # Connection string do Supabase (migração SQL / ETL). Valor setado no dashboard.
+      - key: DATABASE_URL
         sync: false
