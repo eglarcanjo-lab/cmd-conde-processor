@@ -117,6 +117,23 @@ def upload_pedidos():
         return jsonify({"error": str(e)}), 500
 
 
+def _rodar_spo(arquivos, campo, fn, resultados, mes_ref=None, usa_mes=True, msg="processado"):
+    """Importa um relatório SPO uniforme: lê o arquivo, chama o processador e
+    registra ✅/❌ em resultados. Para incluir um KPI novo, basta uma linha no
+    dispatch chamando este helper (ver upload_ambos)."""
+    if campo not in arquivos:
+        return
+    try:
+        if usa_mes:
+            fn(arquivos[campo].read(), mes_ref=mes_ref)
+        else:
+            fn(arquivos[campo].read())
+        resultados[campo] = f"✅ {msg}"
+    except Exception as e:
+        traceback.print_exc()
+        resultados[campo] = f"❌ Erro: {str(e)[:100]}"
+
+
 @app.route("/api/processar/ambos", methods=["POST"])
 def upload_ambos():
     """Recebe clientes + pedidos e processa tudo de uma vez."""
@@ -158,37 +175,11 @@ def upload_ambos():
             traceback.print_exc()
             resultados["faturamento_mktp"] = f"❌ Erro: {str(e)[:100]}"
 
-    if "spo_promo" in arquivos:
-        try:
-            processar_aba_promocao(arquivos["spo_promo"].read(), mes_ref=_mes_ref)
-            resultados["spo_promo"] = "✅ Aba Promoção processada"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_promo"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_dto" in arquivos:
-        try:
-            processar_dto_gc(arquivos["spo_dto"].read(), mes_ref=_mes_ref)
-            resultados["spo_dto"] = "✅ DTO GC processado"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_dto"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_coaching" in arquivos:
-        try:
-            processar_rota_coaching(arquivos["spo_coaching"].read())
-            resultados["spo_coaching"] = "✅ Rota Coaching processada"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_coaching"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_visitacao_gv" in arquivos:
-        try:
-            processar_visitacao_gv(arquivos["spo_visitacao_gv"].read(), mes_ref=_mes_ref)
-            resultados["spo_visitacao_gv"] = "✅ Visitação GV processada"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_visitacao_gv"] = f"❌ Erro: {str(e)[:100]}"
+    # SPO uniformes (ver helper _rodar_spo) — incluir KPI novo = 1 linha aqui.
+    _rodar_spo(arquivos, "spo_promo",        processar_aba_promocao, resultados, _mes_ref, msg="Aba Promoção processada")
+    _rodar_spo(arquivos, "spo_dto",          processar_dto_gc,       resultados, _mes_ref, msg="DTO GC processado")
+    _rodar_spo(arquivos, "spo_coaching",     processar_rota_coaching, resultados, _mes_ref, usa_mes=False, msg="Rota Coaching processada")
+    _rodar_spo(arquivos, "spo_visitacao_gv", processar_visitacao_gv, resultados, _mes_ref, msg="Visitação GV processada")
 
     if "pontos_bees" in arquivos:
         try:
@@ -219,69 +210,14 @@ def upload_ambos():
             traceback.print_exc()
             resultados["tasks"] = f"❌ Erro: {str(e)[:100]}"
 
-    if "spo_score5" in arquivos:
-        try:
-            processar_score5(arquivos["spo_score5"].read(), mes_ref=_mes_ref)
-            resultados["spo_score5"] = "✅ Score 5 processado"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_score5"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_cupons" in arquivos:
-        try:
-            processar_cupons_digitais(arquivos["spo_cupons"].read(), mes_ref=_mes_ref)
-            resultados["spo_cupons"] = "✅ Cupons Digitais processado"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_cupons"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_loja_ideal" in arquivos:
-        try:
-            processar_loja_ideal(arquivos["spo_loja_ideal"].read(), mes_ref=_mes_ref)
-            resultados["spo_loja_ideal"] = "✅ Loja Ideal processado"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_loja_ideal"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_scanntech" in arquivos:
-        try:
-            processar_scanntech(arquivos["spo_scanntech"].read(), mes_ref=_mes_ref)
-            resultados["spo_scanntech"] = "✅ Scanntech processado"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_scanntech"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_portfolio_ideal" in arquivos:
-        try:
-            processar_portfolio_ideal(arquivos["spo_portfolio_ideal"].read(), mes_ref=_mes_ref)
-            resultados["spo_portfolio_ideal"] = "✅ Portfólio Ideal processado"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_portfolio_ideal"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_ap" in arquivos:
-        try:
-            processar_atendimento_produtivo(arquivos["spo_ap"].read(), mes_ref=_mes_ref)
-            resultados["spo_ap"] = "✅ Atendimento Produtivo processado"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_ap"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_rgb" in arquivos:
-        try:
-            processar_rgb(arquivos["spo_rgb"].read(), mes_ref=_mes_ref)
-            resultados["spo_rgb"] = "✅ +RGB processado"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_rgb"] = f"❌ Erro: {str(e)[:100]}"
-
-    if "spo_alone" in arquivos:
-        try:
-            processar_pedido_alone(arquivos["spo_alone"].read(), mes_ref=_mes_ref)
-            resultados["spo_alone"] = "✅ Pedido Alone processado"
-        except Exception as e:
-            traceback.print_exc()
-            resultados["spo_alone"] = f"❌ Erro: {str(e)[:100]}"
+    _rodar_spo(arquivos, "spo_score5",          processar_score5,                resultados, _mes_ref, msg="Score 5 processado")
+    _rodar_spo(arquivos, "spo_cupons",          processar_cupons_digitais,       resultados, _mes_ref, msg="Cupons Digitais processado")
+    _rodar_spo(arquivos, "spo_loja_ideal",      processar_loja_ideal,            resultados, _mes_ref, msg="Loja Ideal processado")
+    _rodar_spo(arquivos, "spo_scanntech",       processar_scanntech,             resultados, _mes_ref, msg="Scanntech processado")
+    _rodar_spo(arquivos, "spo_portfolio_ideal", processar_portfolio_ideal,       resultados, _mes_ref, msg="Portfólio Ideal processado")
+    _rodar_spo(arquivos, "spo_ap",              processar_atendimento_produtivo, resultados, _mes_ref, msg="Atendimento Produtivo processado")
+    _rodar_spo(arquivos, "spo_rgb",             processar_rgb,                   resultados, _mes_ref, msg="+RGB processado")
+    _rodar_spo(arquivos, "spo_alone",           processar_pedido_alone,          resultados, _mes_ref, msg="Pedido Alone processado")
 
     if "inadimplencia" in arquivos:
         try:
