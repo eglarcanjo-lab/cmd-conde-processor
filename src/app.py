@@ -62,6 +62,22 @@ def health():
     return jsonify({"status": "ok", "service": "cmd-conde-processor"})
 
 
+@app.route("/api/migrar/sheets-para-sql", methods=["POST"])
+def migrar_sheets_sql():
+    """Carga inicial Sheets → Postgres (Supabase). Protegido por token. Idempotente:
+    pode rodar de novo (recria/recarrega). Requer a env DATABASE_URL no processador."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    try:
+        from etl import migrar_tudo  # import tardio: só carrega psycopg2 quando chamado
+        relatorio = migrar_tudo()
+        ok = sum(1 for v in relatorio.values() if str(v).startswith("✅"))
+        return jsonify({"success": True, "abas_ok": ok, "relatorio": relatorio})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)[:300]}), 500
+
+
 @app.route("/api/processar/clientes", methods=["POST"])
 def upload_clientes():
     """Recebe o arquivo 0105070402 e processa."""
