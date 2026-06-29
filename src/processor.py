@@ -461,7 +461,9 @@ def _processar_nota_itens(df):
 
 def _processar_cobertura(df_atual, df_ant, df_clientes):
     """Gera cobertura OK/Pendente/NOK por PDV x Categoria."""
-    cats = [c for c in CATEGORIAS_VALIDAS if c not in ("TRIMARCA RGB HE (Original)", "TRIMARCA RGB HE (Stella)", "TRIMARCA RGB HE (Spaten)")]
+    # Inclui TODAS as categorias, inclusive as 3 Trimarca HE (Original/Stella/Spaten),
+    # para a cobertura mostrar OK/NOK delas (antes ficavam "—" por serem excluídas).
+    cats = list(CATEGORIAS_VALIDAS)
 
     # PDVs que compraram no mês atual (por categoria) — expande múltiplas categorias
     ok_set = set()
@@ -1388,7 +1390,7 @@ def calcular_rv_completa():
 
     # Carrega todas as fontes
     df_metas     = ler_aba("metas")
-    df_cobertura = ler_aba("cobertura")
+    # (cobertura não é usada no cálculo de RV — leitura removida; pesava ~20k linhas à toa)
     df_pedidos   = ler_aba("rank_clientes")  # volume por setor
     df_pontos    = ler_aba("rv_pontos_bees")
     df_mktp      = ler_aba("rv_faturamento_mktp")
