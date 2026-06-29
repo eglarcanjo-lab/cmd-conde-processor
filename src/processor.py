@@ -3,7 +3,7 @@ import chardet
 import io
 from datetime import datetime, date
 from categorias import resolver_categoria, carregar_base_produtos, CATEGORIAS_VALIDAS
-from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
+from sheets_service import ler_aba, sobrescrever_aba, sobrescrever_por_mes, atualizar_status_arquivo
 
 # Setores válidos da CMD Conde
 SETORES_VALIDOS = {
@@ -336,22 +336,24 @@ def _processar_vendas_cliente(df_mes):
 
     df_v = d[d["_vol_efetivo"] > 0].copy()
     if df_v.empty:
-        sobrescrever_aba("vendas_cliente_produto", pd.DataFrame(columns=cols_vazio))
         return
-    mes_ref = date.today().strftime("%Y-%m")
+    # Import mensal: cada linha recebe o mês REAL do dado (não "hoje"), p/ acumular
+    # por mês no SQL. Agrupa por setor x pdv x produto x MÊS.
+    df_v["_mes"] = df_v["_data"].dt.strftime("%Y-%m")
     g = (
-        df_v.groupby(["_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod."])["_vol_efetivo"]
+        df_v.groupby(["_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod.", "_mes"])["_vol_efetivo"]
         .sum().reset_index()
         .rename(columns={
             "_setor": "setor", "_cod_pdv": "cod_pdv", "Nome Cliente": "nome_pdv",
-            "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto", "_vol_efetivo": "volume_hl",
+            "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto",
+            "_vol_efetivo": "volume_hl", "_mes": "mes_referencia",
         })
-        .sort_values(["setor", "volume_hl"], ascending=[True, False])
+        .sort_values(["mes_referencia", "setor", "volume_hl"], ascending=[True, True, False])
     )
     g["volume_hl"] = g["volume_hl"].round(3)
-    g["mes_referencia"] = mes_ref
-    sobrescrever_aba("vendas_cliente_produto", g)
-    print(f"  🤖 vendas_cliente_produto (Hop): {len(g)} linhas")
+    # Acumula: substitui só os meses presentes neste arquivo, mantém os demais.
+    sobrescrever_por_mes("vendas_cliente_produto", g, "mes_referencia")
+    print(f"  🤖 vendas_cliente_produto (Hop): {len(g)} linhas, meses {sorted(g['mes_referencia'].unique())}")
 
 
 def _processar_entregas_efetivadas(df):

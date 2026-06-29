@@ -96,6 +96,37 @@ def sobrescrever_aba(nome_aba, df):
         conn.close()
 
 
+def sobrescrever_por_mes(nome_aba, df, col_mes):
+    """Acúmulo por mês: cria a tabela se preciso, APAGA só os meses presentes no df
+    e INSERE os novos — mantendo os demais meses. Memória leve (não lê o histórico).
+    Usado nos imports mensais de pedidos (substitui só o mês reimportado)."""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cols = [str(c).strip() for c in df.columns if str(c).strip() != ""]
+        cols_l = [c.lower() for c in cols]
+        cols_sql = ", ".join('"%s"' % c for c in cols_l)
+        defs = ", ".join('"%s" TEXT' % c for c in cols_l) or '"_vazio" TEXT'
+        cur.execute('CREATE TABLE IF NOT EXISTS "%s" (%s)' % (nome_aba, defs))
+        cm = col_mes.lower()
+        meses = sorted({str(m).strip() for m in df[col_mes].dropna().tolist() if str(m).strip()}) if col_mes in df.columns else []
+        if meses:
+            cur.execute('DELETE FROM "%s" WHERE "%s" = ANY(%%s)' % (nome_aba, cm), (meses,))
+        n = len(df) if cols else 0
+
+        def _rows():
+            for t in df[cols].itertuples(index=False, name=None):
+                yield tuple(_to_param(v) for v in t)
+
+        if n:
+            execute_values(cur, 'INSERT INTO "%s" (%s) VALUES %%s' % (nome_aba, cols_sql),
+                           _rows(), page_size=500)
+        conn.commit()
+        print("  ✅ [SQL] '%s' (acumula %s): +%d linhas (meses: %s)" % (nome_aba, cm, n, ",".join(meses)))
+    finally:
+        conn.close()
+
+
 def atualizar_status_arquivo(nome_arquivo, status, detalhes=""):
     from datetime import datetime
     try:

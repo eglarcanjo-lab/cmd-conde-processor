@@ -128,6 +128,26 @@ def sobrescrever_aba(nome_aba, df):
     _com_retry(_sobrescrever)
 
 
+def sobrescrever_por_mes(nome_aba, df, col_mes):
+    """Acúmulo por mês (path Sheets — backup). Lê o existente, remove os meses
+    presentes no df e regrava com a união. No SQL isto é DELETE+INSERT (leve)."""
+    try:
+        antigo = ler_aba(nome_aba)
+    except Exception:
+        antigo = pd.DataFrame()
+    meses = {str(m).strip() for m in df[col_mes].dropna().tolist()} if col_mes in df.columns else set()
+    if not antigo.empty and col_mes in antigo.columns and meses:
+        antigo = antigo[~antigo[col_mes].astype(str).str.strip().isin(meses)]
+        for c in df.columns:
+            if c not in antigo.columns:
+                antigo[c] = ""
+        antigo = antigo[df.columns]
+        out = pd.concat([antigo, df], ignore_index=True)
+    else:
+        out = df
+    sobrescrever_aba(nome_aba, out)
+
+
 def atualizar_status_arquivo(nome_arquivo, status, detalhes=""):
     """Registra o status de processamento, com retry em caso de quota."""
     def _atualizar():
@@ -167,4 +187,4 @@ def atualizar_status_arquivo(nome_arquivo, status, detalhes=""):
 # (padrão). get_sheet() segue disponível para o ETL ler o Sheets. Reversível: troca a env.
 if os.environ.get("DATA_BACKEND", "sheets").strip().lower() == "sql":
     print("📦 DATA_BACKEND=sql → processador usando PostgreSQL.")
-    from sql_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo  # noqa: F401,F811
+    from sql_service import ler_aba, sobrescrever_aba, sobrescrever_por_mes, atualizar_status_arquivo  # noqa: F401,F811
