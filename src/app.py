@@ -296,12 +296,19 @@ def upload_ambos():
     df_clientes = None
     gc.collect()
 
-    # RV NÃO é recalculada aqui de propósito: somada ao import (carrega cobertura ~20k)
-    # estourava os 512MB e derrubava o worker (OOM não é capturável por except).
-    # Recalcule num passo separado, com a memória livre: POST /api/rv/calcular.
+    # RV recalculada automaticamente ao importar um relatório que a alimenta.
+    # (Ficou desligada por um tempo por causa de OOM no Render free — cobertura ~20k
+    # somada ao import estourava 512MB. Com a importação agora mês a mês os arquivos
+    # são menores e a memória cabe; a fase pesada do import já foi liberada acima com gc.)
     rv_keys = {"pedidos", "faturamento_mktp", "pontos_bees", "spo_ap"}
     if rv_keys & set(arquivos.keys()):
-        resultados["rv_recalculada"] = "⏳ Recalcule a RV à parte: POST /api/rv/calcular"
+        try:
+            gc.collect()
+            calcular_rv_completa()
+            resultados["rv_recalculada"] = "✅ RV recalculada automaticamente"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["rv_recalculada"] = f"❌ Erro ao recalcular RV: {str(e)[:120]}"
 
     return jsonify({"success": True, "resultados": resultados})
 
