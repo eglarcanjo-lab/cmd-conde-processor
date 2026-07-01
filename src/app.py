@@ -65,7 +65,15 @@ def _handle_erro(e):
 def health():
     import os
     backend = "sql" if os.environ.get("DATA_BACKEND", "sheets").strip().lower() == "sql" else "sheets"
-    return jsonify({"status": "ok", "service": "cmd-conde-processor", "data_backend": backend})
+    # Prova qual implementação REALMENTE está ligada (pega bug de import order):
+    impls = {}
+    try:
+        import sheets_service, processor
+        impls["sheets_service.sobrescrever_aba"] = sheets_service.sobrescrever_aba.__module__
+        impls["processor.sobrescrever_aba"] = processor.sobrescrever_aba.__module__
+    except Exception as e:
+        impls["erro"] = str(e)[:100]
+    return jsonify({"status": "ok", "service": "cmd-conde-processor", "data_backend": backend, "impls": impls})
 
 
 @app.route("/api/migrar/sheets-para-sql", methods=["POST"])
