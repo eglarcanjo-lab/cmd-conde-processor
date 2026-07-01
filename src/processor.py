@@ -219,9 +219,16 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
                    "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo",
                    "Desc Tipo Movimento", "Nota Fiscal"}
-    df = ler_csv_inf(conteudo_bytes, usecols=lambda c: c.strip() in COLS_USADAS)
+    # Candidatos para o nº do pedido (col Z) — usado p/ cruzar Faturados x Buffer.
+    # O nome exato no relatório varia; pegamos o primeiro que existir.
+    PEDIDO_CANDIDATOS = ["Nr. Pedido", "Num Pedido", "Nr Pedido", "Numero Pedido",
+                         "Número Pedido", "Pedido", "Cod. Pedido", "Nr. Ped."]
+    df = ler_csv_inf(conteudo_bytes,
+                     usecols=lambda c: c.strip() in COLS_USADAS or c.strip() in PEDIDO_CANDIDATOS)
     df.columns = [c.strip() for c in df.columns]
     gc.collect()
+    _col_pedido = next((c for c in PEDIDO_CANDIDATOS if c in df.columns), None)
+    print(f"  🔑 Coluna do nº do pedido: {_col_pedido or 'NÃO ENCONTRADA (cruzamento Faturados x Buffer ficará vazio)'}")
 
     # Normalizar setor
     df["_setor"] = df["Setor"].apply(normalizar_setor)
@@ -261,6 +268,22 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
 
     # Normalizar cod cliente
     df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0").str.strip()
+
+    # ── Chave de pedido (p/ cruzar Faturados x Buffer) ────────────────────────
+    # Tabela compacta: nº do pedido × tipo de operação → volume marcação (HL) somado.
+    if _col_pedido:
+        _num_ped = df[_col_pedido].astype(str).str.strip().str.lstrip("0")
+        _tipo = df["Desc Tipo Movimento"].astype(str).str.strip() if "Desc Tipo Movimento" in df.columns else ""
+        chave = pd.DataFrame({
+            "num_pedido": _num_ped,
+            "tipo_operacao": _tipo,
+            "volume_marcacao": df["_volume_marcacao"],
+        })
+        chave = chave[chave["num_pedido"] != ""]
+        chave = chave.groupby(["num_pedido", "tipo_operacao"], as_index=False)["volume_marcacao"].sum()
+        chave["volume_marcacao"] = chave["volume_marcacao"].round(3)
+        sobrescrever_aba("pedido_chave", chave)
+        print(f"  🔑 pedido_chave: {len(chave)} linhas (nº pedido × tipo operação)")
 
     hoje = date.today()
     mes_atual = hoje.replace(day=1)
@@ -319,6 +342,80 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     gc.collect()
     atualizar_status_arquivo("03014701 (Pedidos)", "✅ OK", f"{n_linhas} linhas processadas")
     print(f"  ✅ Pedidos processados: {n_linhas} linhas")
+
+
+def _montar_detalhe_pedidos(base):
+    """base: DataFrame distinto com _setor,_cod_pdv,_nome_pdv,_num_pedido.
+    Junta com 'pedido_chave' (nº pedido × tipo operação → volume marcação) e devolve
+    o detalhe por pedido × tipo. Pedidos sem correspondência entram com volume 0."""
+    chave = ler_aba("pedido_chave")
+    if chave is None or chave.empty:
+        det = base.copy()
+        det["tipo_operacao"] = ""
+        det["volume_marcacao"] = 0.0
+    else:
+        chave = chave.copy()
+        chave["num_pedido"] = chave["num_pedido"].astype(str).str.strip().str.lstrip("0")
+        chave["volume_marcacao"] = pd.to_numeric(chave["volume_marcacao"], errors="coerce").fillna(0.0)
+        det = base.merge(chave, left_on="_num_pedido", right_on="num_pedido", how="left")
+        det["tipo_operacao"] = det["tipo_operacao"].fillna("").astype(str)
+        det["volume_marcacao"] = pd.to_numeric(det["volume_marcacao"], errors="coerce").fillna(0.0).round(3)
+    return pd.DataFrame({
+        "setor": det["_setor"].values,
+        "cod_pdv": det["_cod_pdv"].values,
+        "nome_pdv": det["_nome_pdv"].values,
+        "num_pedido": det["_num_pedido"].values,
+        "tipo_operacao": det["tipo_operacao"].values,
+        "volume_marcacao": det["volume_marcacao"].values,
+    })
+
+
+def processar_faturados(conteudo_bytes):
+    """Rotina 030237 — clientes com NF faturada (pedidos que saíram p/ entrega).
+    Cols: C=Setor-nf, M=Cliente(cod PDV), N=Nome(PDV), AC=Nr. Pedido. Cruza o nº do
+    pedido com pedido_chave p/ trazer tipo de operação + volume marcação (HL).
+    Gera 'faturados_detalhe' (snapshot — substitui a cada import)."""
+    print("📂 Processando Faturados (030237)...")
+    df = ler_csv_inf(conteudo_bytes,
+                     usecols=lambda c: c.strip() in {"Setor - nf", "Cliente", "Nome", "Nr. Pedido"})
+    df.columns = [c.strip() for c in df.columns]
+    df["_setor"] = df["Setor - nf"].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+    df["_cod_pdv"] = df["Cliente"].astype(str).str.strip().str.lstrip("0")
+    df["_nome_pdv"] = df["Nome"].astype(str).str.strip()
+    df["_num_pedido"] = df["Nr. Pedido"].astype(str).str.strip().str.lstrip("0")
+    base = df[["_setor", "_cod_pdv", "_nome_pdv", "_num_pedido"]].drop_duplicates()
+    base = base[base["_num_pedido"] != ""]
+    out = _montar_detalhe_pedidos(base)
+    sobrescrever_aba("faturados_detalhe", out)
+    n_ped = base["_num_pedido"].nunique()
+    atualizar_status_arquivo("030237 (Faturados)", "✅ OK", f"{n_ped} pedidos, {len(out)} linhas")
+    print(f"  ✅ Faturados: {n_ped} pedidos, {len(out)} linhas")
+    return out
+
+
+def processar_buffer(conteudo_bytes):
+    """Rotina 030111 — pedidos parados no Buffer (ainda não faturados).
+    Cols: G=Num Pedido, H=Cod. Vendedor(setor), I=Cod. Cliente, J=Nome Cliente. Cruza
+    o nº do pedido com pedido_chave p/ trazer tipo de operação + volume marcação (HL).
+    Gera 'buffer_detalhe' (snapshot — substitui a cada import)."""
+    print("📂 Processando Buffer (030111)...")
+    df = ler_csv_inf(conteudo_bytes,
+                     usecols=lambda c: c.strip() in {"Cod. Vendedor", "Num Pedido", "Cod. Cliente", "Nome Cliente"})
+    df.columns = [c.strip() for c in df.columns]
+    df["_setor"] = df["Cod. Vendedor"].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+    df["_cod_pdv"] = df["Cod. Cliente"].astype(str).str.strip().str.lstrip("0")
+    df["_nome_pdv"] = df["Nome Cliente"].astype(str).str.strip()
+    df["_num_pedido"] = df["Num Pedido"].astype(str).str.strip().str.lstrip("0")
+    base = df[["_setor", "_cod_pdv", "_nome_pdv", "_num_pedido"]].drop_duplicates()
+    base = base[base["_num_pedido"] != ""]
+    out = _montar_detalhe_pedidos(base)
+    sobrescrever_aba("buffer_detalhe", out)
+    n_ped = base["_num_pedido"].nunique()
+    atualizar_status_arquivo("030111 (Buffer)", "✅ OK", f"{n_ped} pedidos, {len(out)} linhas")
+    print(f"  ✅ Buffer: {n_ped} pedidos, {len(out)} linhas")
+    return out
 
 
 def _processar_vendas_cliente(df_mes):

@@ -6,7 +6,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -274,6 +274,23 @@ def upload_ambos():
             traceback.print_exc()
             resultados["pedidos"] = f"❌ Erro: {str(e)[:100]}"
 
+    # Faturados/Buffer rodam DEPOIS de pedidos (dependem de pedido_chave).
+    if "faturados" in arquivos:
+        try:
+            df_f = processar_faturados(arquivos["faturados"].read())
+            resultados["faturados"] = f"✅ {len(df_f)} linhas (Faturados)"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["faturados"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "buffer" in arquivos:
+        try:
+            df_b = processar_buffer(arquivos["buffer"].read())
+            resultados["buffer"] = f"✅ {len(df_b)} linhas (Buffer)"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["buffer"] = f"❌ Erro: {str(e)[:100]}"
+
     # Libera a memória das fases pesadas do import (Render free = 512MB).
     import gc
     df_clientes = None
@@ -354,6 +371,38 @@ def upload_grade():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("Grade de Estoque", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/faturados", methods=["POST"])
+def upload_faturados():
+    """Rotina 030237 — clientes com NF faturada. Cruza com pedido_chave."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+    try:
+        df = processar_faturados(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Faturados processados: {len(df)} linhas."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("030237 (Faturados)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/buffer", methods=["POST"])
+def upload_buffer():
+    """Rotina 030111 — pedidos parados no Buffer. Cruza com pedido_chave."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+    try:
+        df = processar_buffer(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"Buffer processado: {len(df)} linhas."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("030111 (Buffer)", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 
