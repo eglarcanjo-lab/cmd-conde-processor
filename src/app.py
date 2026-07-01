@@ -63,7 +63,9 @@ def _handle_erro(e):
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "service": "cmd-conde-processor"})
+    import os
+    backend = "sql" if os.environ.get("DATA_BACKEND", "sheets").strip().lower() == "sql" else "sheets"
+    return jsonify({"status": "ok", "service": "cmd-conde-processor", "data_backend": backend})
 
 
 @app.route("/api/migrar/sheets-para-sql", methods=["POST"])

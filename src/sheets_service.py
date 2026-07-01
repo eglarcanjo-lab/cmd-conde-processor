@@ -188,3 +188,7 @@ def atualizar_status_arquivo(nome_arquivo, status, detalhes=""):
 if os.environ.get("DATA_BACKEND", "sheets").strip().lower() == "sql":
     print("📦 DATA_BACKEND=sql → processador usando PostgreSQL.")
     from sql_service import ler_aba, sobrescrever_aba, sobrescrever_por_mes, atualizar_status_arquivo  # noqa: F401,F811
+else:
+    print("⚠️ DATA_BACKEND!=sql → processador GRAVANDO NO GOOGLE SHEETS "
+          f"(valor atual: {os.environ.get('DATA_BACKEND')!r}). Se você migrou p/ SQL, "
+          "defina DATA_BACKEND=sql no serviço do processador (Render) e reinicie.")
