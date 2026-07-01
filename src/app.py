@@ -34,14 +34,15 @@ def verificar_token(req):
 
 
 def _eh_quota_429(e):
-    """True se a exceção for quota 429 do Google Sheets (gspread)."""
+    """True SÓ se for realmente quota 429 do gspread (instância APIError com status 429).
+    Não confia em string solta ('429'/'quota' no texto) — isso mascarava erros de SQL
+    como se fossem do Google Sheets."""
     try:
         import gspread
-        if isinstance(e, gspread.exceptions.APIError):
-            return getattr(getattr(e, "response", None), "status_code", None) == 429
+        return (isinstance(e, gspread.exceptions.APIError)
+                and getattr(getattr(e, "response", None), "status_code", None) == 429)
     except Exception:
-        pass
-    return "429" in str(e) and "quota" in str(e).lower()
+        return False
 
 
 @app.errorhandler(Exception)
@@ -58,7 +59,8 @@ def _handle_erro(e):
             "error": "Quota do Google Sheets excedida. Aguarde ~1 minuto e "
                      "importe menos relatórios por vez."
         }), 429
-    return jsonify({"error": str(e)[:200] or "Erro interno no processador."}), 500
+    # Mostra o erro REAL (tipo + mensagem) — nada de esconder atrás de "Google Sheets".
+    return jsonify({"error": f"[{type(e).__name__}] {str(e)[:220]}".strip() or "Erro interno no processador."}), 500
 
 
 @app.route("/health")
