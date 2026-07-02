@@ -322,6 +322,10 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     _processar_entregas_efetivadas(df)
     gc.collect()
 
+    # ── Volume DIÁRIO por PDV e por produto (comparação D-1 acumulado no dashboard) ──
+    _processar_vendas_diaria(df)
+    gc.collect()
+
     # ── Ruptura de estoque (detalhe por cliente x produto x dia) ──────────────
     _processar_ruptura(df)
     gc.collect()
@@ -416,6 +420,34 @@ def processar_buffer(conteudo_bytes):
     atualizar_status_arquivo("030111 (Buffer)", "✅ OK", f"{n_ped} pedidos, {len(out)} linhas")
     print(f"  ✅ Buffer: {n_ped} pedidos, {len(out)} linhas")
     return out
+
+
+def _processar_vendas_diaria(df):
+    """Volume diário por PDV e por produto (setor x cod x DIA), acumulado mês a mês.
+    Base da comparação D-1 acumulada no dashboard (dia 01..D-1 deste mês vs mês anterior).
+    Usa Volume Entrega (dias passados = entregue). Grava vd_pdv e vd_produto."""
+    d = df[df["_data"].notna()]
+    if d.empty:
+        return
+    dia = d["_data"].dt.strftime("%Y-%m-%d")
+    mes = d["_data"].dt.strftime("%Y-%m")
+    base = pd.DataFrame({
+        "setor": d["_setor"].values,
+        "cod_pdv": d["_cod_pdv"].values,
+        "nome_pdv": d["Nome Cliente"].astype(str).str.strip().values,
+        "cod_produto": d["Cod. Prod."].astype(str).str.strip().str.lstrip("0").values,
+        "nome_produto": d["Nome Prod."].astype(str).str.strip().values,
+        "data": dia.values,
+        "mes_referencia": mes.values,
+        "volume_hl": pd.to_numeric(d["_volume"], errors="coerce").fillna(0.0).values,
+    })
+    vp = base.groupby(["setor", "cod_pdv", "nome_pdv", "data", "mes_referencia"], as_index=False)["volume_hl"].sum()
+    vp["volume_hl"] = vp["volume_hl"].round(3)
+    sobrescrever_por_mes("vd_pdv", vp, "mes_referencia")
+    vq = base.groupby(["setor", "cod_produto", "nome_produto", "data", "mes_referencia"], as_index=False)["volume_hl"].sum()
+    vq["volume_hl"] = vq["volume_hl"].round(3)
+    sobrescrever_por_mes("vd_produto", vq, "mes_referencia")
+    print(f"  📅 vd_pdv: {len(vp)} · vd_produto: {len(vq)} linhas (volume diário)")
 
 
 def _processar_vendas_cliente(df_mes):
