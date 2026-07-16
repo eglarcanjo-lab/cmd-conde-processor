@@ -497,8 +497,11 @@ def upload_pontos_bees():
 def calcular_rv():
     if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
     try:
-        df = calcular_rv_completa()
-        return jsonify({"success": True, "message": f"RV calculada: {len(df)} setores."})
+        # mes (YYYY-MM, opcional): recalcula a RV daquele mês; sem ele, mês corrente.
+        body = request.get_json(silent=True) or {}
+        mes = (body.get("mes") or request.form.get("mes") or "").strip() or None
+        df = calcular_rv_completa(mes_ref=mes)
+        return jsonify({"success": True, "message": f"RV calculada: {len(df)} setores ({mes or 'mês corrente'})."})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

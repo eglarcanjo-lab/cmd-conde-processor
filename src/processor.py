@@ -317,11 +317,8 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     del df_4m
     gc.collect()
 
-    # ── Volume RV (mês atual — para cálculo de remuneração) ───────────────────
-    if _tem_mes_atual:
-        processar_volume_rv(df_mes_atual, date.today().strftime("%Y-%m"))
-    else:
-        print("  ⏭️ Volume RV: arquivo sem linhas do mês corrente — mantido")
+    # ── Volume RV (todos os meses do arquivo — acumula por mês) ───────────────
+    processar_volume_rv(df)
 
     # ── Vendas por cliente x produto (TODOS os meses do arquivo — acumula por mês) ──
     # Passa o df completo: a função agrupa pelo mês REAL de cada linha e substitui só
@@ -1251,9 +1248,12 @@ def processar_grade_estoque(conteudo_bytes):
     return g
 
 
-def processar_volume_rv(df_pedidos, mes_ref):
+def processar_volume_rv(df_pedidos, mes_ref=None):
     """
-    Extrai volume por setor e categoria para cálculo de RV.
+    Extrai volume por setor x categoria x MÊS (mês real de cada linha, via _data) para
+    o cálculo de RV. Acumula por mês: substitui só os meses presentes no arquivo —
+    importar junho em julho grava junho sem apagar julho. (mes_ref é ignorado; mantido
+    na assinatura por compatibilidade.)
     Gera aba rv_volume com: setor | categoria | volume | mes_ref
     """
     print("📊 Gerando volume RV...")
@@ -1270,16 +1270,20 @@ def processar_volume_rv(df_pedidos, mes_ref):
         "MATCH",
     }
 
+    d = df_pedidos[(df_pedidos["_volume"] > 0) & (df_pedidos["_data"].notna())]
     linhas = []
-    for _, row in df_pedidos[df_pedidos["_volume"] > 0].iterrows():
+    for _, row in d.iterrows():
         cats = row.get("_categorias") or []
+        if not cats:
+            continue
+        _m = row["_data"].strftime("%Y-%m")  # mês REAL da linha
         for cat in cats:
             if cat in cats_rv:
                 linhas.append({
                     "setor": row["_setor"],
                     "categoria": cat,
                     "volume": row["_volume"],
-                    "mes_ref": mes_ref,
+                    "mes_ref": _m,
                 })
 
     if not linhas:
@@ -1292,8 +1296,9 @@ def processar_volume_rv(df_pedidos, mes_ref):
         .reset_index()
     )
     resultado["volume"] = resultado["volume"].round(2)
-    sobrescrever_aba("rv_volume", resultado)
-    print(f"  ✅ Volume RV: {len(resultado)} linhas")
+    # Acumula por mês: substitui só os meses do arquivo, mantém os demais.
+    sobrescrever_por_mes("rv_volume", resultado, "mes_ref")
+    print(f"  ✅ Volume RV: {len(resultado)} linhas · meses {sorted(resultado['mes_ref'].unique())}")
 
 
 # ─── RV — VOLUME POR CATEGORIA ───────────────────────────────────────────────
@@ -1498,7 +1503,8 @@ def processar_pontos_bees(conteudo_bytes):
     resultado["pct_atingimento"]   = (resultado["pontos_real"] / META_PONTOS_BEES * 100).round(1)
     resultado["mes_referencia"]    = mes_ref
 
-    sobrescrever_aba("rv_pontos_bees", resultado)
+    # Acumula por mês (o mês vem do próprio arquivo): junho e julho convivem.
+    sobrescrever_por_mes("rv_pontos_bees", resultado, "mes_referencia")
     atualizar_status_arquivo("Pontos Bees (BI)", "✅ OK",
         f"{len(resultado)} setores | período {ultimo_periodo} | mês {mes_ref}")
     print(f"  ✅ Pontos Force: {len(resultado)} setores, período {ultimo_periodo}, mês {mes_ref}")
@@ -1526,25 +1532,34 @@ def _normalizar_cat_rv(cat_raw):
     return _MAP.get(cat, cat)
 
 
-def calcular_rv_completa():
+def calcular_rv_completa(mes_ref=None):
     """
-    Calcula a RV completa para todos os RNs com base nos dados já processados.
-    Grava na aba rv_resultado.
+    Calcula a RV para todos os RNs com base nos dados já processados.
+    mes_ref (YYYY-MM, opcional): calcula a RV DAQUELE mês (fontes filtradas pelo mês).
+    Sem ele, usa o mês corrente. Grava em rv_resultado ACUMULANDO por mês
+    (substitui só o mês calculado — o histórico dos outros meses fica).
     """
-    print("📊 Calculando RV completa...")
+    _mes_rv = str(mes_ref).strip() if mes_ref else date.today().strftime("%Y-%m")
+    print(f"📊 Calculando RV completa · mês {_mes_rv}...")
+
+    # Linhas sem mês contam como o mês-alvo (compatibilidade com dados antigos).
+    def _do_mes(row, col="mes_referencia"):
+        _m = str(row.get(col, "") or "").strip()
+        return (not _m) or _m == _mes_rv
 
     # Carrega todas as fontes
     df_metas     = ler_aba("metas")
-    # (cobertura não é usada no cálculo de RV — leitura removida; pesava ~20k linhas à toa)
-    df_pedidos   = ler_aba("rank_clientes")  # volume por setor
+    # (cobertura e rank_clientes não são usados no cálculo — leituras removidas)
     df_pontos    = ler_aba("rv_pontos_bees")
     df_mktp      = ler_aba("rv_faturamento_mktp")
     df_ap        = ler_aba("rv_ap")
 
-    # Mapa de metas por setor/categoria
+    # Mapa de metas por setor/categoria (só do mês-alvo)
     metas_map = {}
     po_total_map = {}
     for _, row in df_metas.iterrows():
+        if not _do_mes(row):
+            continue
         setor = str(row.get("setor", "")).strip()
         # Normaliza categoria: "CERVEJA (VOLUME)" → "CERVEJA", "PONTOS FORCE" → "PONTOS BEES"
         cat   = _normalizar_cat_rv(row.get("categoria", ""))
@@ -1558,24 +1573,25 @@ def calcular_rv_completa():
         if cat == "PO_TOTAL":
             po_total_map[setor] = meta
 
-    # Mapa de pontos Bees
+    # Mapa de pontos Bees (só do mês-alvo)
     pontos_map = {}
     for _, row in df_pontos.iterrows():
+        if not _do_mes(row):
+            continue
         pontos_map[str(row.get("setor","")).strip()] = float(row.get("pontos_real", 0) or 0)
 
-    # Mapa de faturamento Mktp — a tabela acumula meses; a RV usa só o MÊS CORRENTE.
-    # (Linhas antigas sem mes_referencia contam como corrente, por compatibilidade.)
-    _mes_rv = date.today().strftime("%Y-%m")
+    # Mapa de faturamento Mktp (só do mês-alvo)
     mktp_map = {}
     for _, row in df_mktp.iterrows():
-        _m = str(row.get("mes_referencia", "") or "").strip()
-        if _m and _m != _mes_rv:
+        if not _do_mes(row):
             continue
         mktp_map[str(row.get("setor","")).strip()] = float(row.get("faturamento_mktp_real", 0) or 0)
 
-    # Mapa AP (atendimento produtivo)
+    # Mapa AP (atendimento produtivo — só do mês-alvo)
     ap_map = {}
     for _, row in df_ap.iterrows():
+        if not _do_mes(row):
+            continue
         ap_map[str(row.get("setor","")).strip()] = str(row.get("ap_ok","NOK")).strip().upper()
 
     # Volume real por setor/categoria (gerado por processar_pedidos → rv_volume)
@@ -1589,6 +1605,8 @@ def calcular_rv_completa():
     }
     NAB_CATS = {"NAB", "NAB ZERO"}
     for _, row in df_vol.iterrows():
+        if not _do_mes(row, col="mes_ref"):
+            continue
         setor = str(row.get("setor", "")).strip()
         cat   = str(row.get("categoria", "")).strip().upper()
         vol   = float(row.get("volume", 0) or 0)
@@ -1656,12 +1674,13 @@ def calcular_rv_completa():
             "meta_marketplace":   meta_mktp,
             "peso_marketplace":   w["marketplace"],
             "indicador_variavel": var_label,
-            "mes_referencia": date.today().strftime("%Y-%m"),
+            "mes_referencia": _mes_rv,
         })
 
     df_resultado = pd.DataFrame(resultados)
-    sobrescrever_aba("rv_resultado", df_resultado)
-    print(f"  ✅ RV calculada: {len(df_resultado)} setores")
+    # Acumula por mês: substitui só o mês calculado, preserva o histórico dos demais.
+    sobrescrever_por_mes("rv_resultado", df_resultado, "mes_referencia")
+    print(f"  ✅ RV calculada: {len(df_resultado)} setores · mês {_mes_rv}")
     return df_resultado
 
 
@@ -3811,7 +3830,8 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
                 "ap_ok":               ap_ok_val,
             })
         df_rv_ap = pd.DataFrame(rv_ap_rows)
-        sobrescrever_aba("rv_ap", df_rv_ap)
+        # Acumula por mês: substitui só o mês do arquivo, mantém os demais.
+        sobrescrever_por_mes("rv_ap", df_rv_ap, "mes_referencia")
         print(f"  ✅ rv_ap atualizada: {len(df_rv_ap)} setores")
 
         # ── Resumo por GV e operação ──────────────────────────────────────────
