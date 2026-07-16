@@ -296,8 +296,15 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     df_4m = df[_datas >= quatro_meses_atras]
     del _datas
 
+    # Import de mês ANTIGO (arquivo sem linhas do mês corrente): não recalcula os
+    # snapshots do "mês atual" (cobertura/volume RV) — senão zeraria o que está valendo.
+    _tem_mes_atual = not df_mes_atual.empty
+
     # ── Cobertura ─────────────────────────────────────────────────────────────
-    _processar_cobertura(df_mes_atual, df_mes_ant, df_clientes_base)
+    if _tem_mes_atual:
+        _processar_cobertura(df_mes_atual, df_mes_ant, df_clientes_base)
+    else:
+        print("  ⏭️ Cobertura: arquivo sem linhas do mês corrente — snapshot mantido")
     del df_mes_ant
     gc.collect()
 
@@ -311,10 +318,15 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     gc.collect()
 
     # ── Volume RV (mês atual — para cálculo de remuneração) ───────────────────
-    processar_volume_rv(df_mes_atual, date.today().strftime("%Y-%m"))
+    if _tem_mes_atual:
+        processar_volume_rv(df_mes_atual, date.today().strftime("%Y-%m"))
+    else:
+        print("  ⏭️ Volume RV: arquivo sem linhas do mês corrente — mantido")
 
-    # ── Vendas por cliente x produto (mês atual — base da assistente Hop) ──────
-    _processar_vendas_cliente(df_mes_atual)
+    # ── Vendas por cliente x produto (TODOS os meses do arquivo — acumula por mês) ──
+    # Passa o df completo: a função agrupa pelo mês REAL de cada linha e substitui só
+    # os meses presentes no arquivo (import de junho em julho grava junho certinho).
+    _processar_vendas_cliente(df)
     del df_mes_atual
     gc.collect()
 
@@ -1354,9 +1366,11 @@ PESOS_RV = {
 }
 
 
-def processar_faturamento_mktp(conteudo_bytes):
+def processar_faturamento_mktp(conteudo_bytes, mes_ref=None):
     """
     Processa o arquivo 030509 (GMV Marketplace por setor).
+    mes_ref (YYYY-MM, opcional): mês de referência vindo da UI — permite importar meses
+    anteriores. Sem ele, usa o mês corrente. Acumula por mês (substitui só o mês importado).
     Filtra apenas produtos com categoria MKTP em produtos_base.
     Se produtos_base não tiver produtos MKTP cadastrados, soma TUDO (fallback).
     Colunas usadas: Vendedor (setor, col N), Cod.Produto (col C), Total Venda (col G).
@@ -1413,12 +1427,14 @@ def processar_faturamento_mktp(conteudo_bytes):
         .reset_index()
         .rename(columns={"_setor": "setor", "_total_venda": "faturamento_mktp_real"})
     )
-    resultado["mes_referencia"] = date.today().strftime("%Y-%m")
+    _mes = str(mes_ref).strip() if mes_ref else date.today().strftime("%Y-%m")
+    resultado["mes_referencia"] = _mes
     resultado["faturamento_mktp_real"] = resultado["faturamento_mktp_real"].round(2)
 
-    sobrescrever_aba("rv_faturamento_mktp", resultado)
-    atualizar_status_arquivo("030509 (Faturamento Mktp)", "✅ OK", f"{len(resultado)} setores processados")
-    print(f"  ✅ Faturamento Mktp: {len(resultado)} setores")
+    # Acumula por mês: substitui só o mês importado, mantém os demais.
+    sobrescrever_por_mes("rv_faturamento_mktp", resultado, "mes_referencia")
+    atualizar_status_arquivo("030509 (Faturamento Mktp)", "✅ OK", f"{len(resultado)} setores · mês {_mes}")
+    print(f"  ✅ Faturamento Mktp: {len(resultado)} setores · mês {_mes}")
     return resultado
 
 
@@ -1547,9 +1563,14 @@ def calcular_rv_completa():
     for _, row in df_pontos.iterrows():
         pontos_map[str(row.get("setor","")).strip()] = float(row.get("pontos_real", 0) or 0)
 
-    # Mapa de faturamento Mktp
+    # Mapa de faturamento Mktp — a tabela acumula meses; a RV usa só o MÊS CORRENTE.
+    # (Linhas antigas sem mes_referencia contam como corrente, por compatibilidade.)
+    _mes_rv = date.today().strftime("%Y-%m")
     mktp_map = {}
     for _, row in df_mktp.iterrows():
+        _m = str(row.get("mes_referencia", "") or "").strip()
+        if _m and _m != _mes_rv:
+            continue
         mktp_map[str(row.get("setor","")).strip()] = float(row.get("faturamento_mktp_real", 0) or 0)
 
     # Mapa AP (atendimento produtivo)

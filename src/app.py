@@ -201,7 +201,7 @@ def upload_ambos():
 
     if "faturamento_mktp" in arquivos:
         try:
-            processar_faturamento_mktp(arquivos["faturamento_mktp"].read())
+            processar_faturamento_mktp(arquivos["faturamento_mktp"].read(), mes_ref=_mes_ref)
             resultados["faturamento_mktp"] = "✅ Processado com sucesso"
         except Exception as e:
             traceback.print_exc()
@@ -462,7 +462,7 @@ def upload_faturamento_mktp():
     if not verificar_token(request): return jsonify({"error": "Token inválido."}), 401
     if "arquivo" not in request.files: return jsonify({"error": "Envie o arquivo."}), 400
     try:
-        df = processar_faturamento_mktp(request.files["arquivo"].read())
+        df = processar_faturamento_mktp(request.files["arquivo"].read(), mes_ref=request.form.get("mes_ref") or None)
         # Recalcula RV automaticamente após atualizar faturamento Mktp
         try:
             calcular_rv_completa()
@@ -841,7 +841,7 @@ def upload_zip():
             elif campo == "produtos_base":
                 processar_produtos_base(b)
             elif campo == "faturamento_mktp":
-                processar_faturamento_mktp(b); precisa_rv = True
+                processar_faturamento_mktp(b, mes_ref=mes_ref); precisa_rv = True
             elif campo == "pontos_bees":
                 processar_pontos_bees(b); precisa_rv = True
             elif campo == "spo_visitacao_gv":
