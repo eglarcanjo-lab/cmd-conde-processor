@@ -466,7 +466,11 @@ def _processar_vendas_cliente(df_mes):
     dias anteriores usam Volume Entrega — mesma lógica do Volume Diário."""
     cols_vazio = ["setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "volume_hl", "mes_referencia"]
     hoje_str = date.today().strftime("%d/%m/%Y")
-    d = df_mes.copy()
+    # MEMÓRIA (Render free 512MB): copia SÓ as colunas usadas — o df completo tem
+    # _categorias (listas Python, pesadas) e mais ~10 colunas que não entram aqui.
+    _COLS = ["_data", "_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod.",
+             "_volume", "_volume_marcacao"]
+    d = df_mes[_COLS].copy()
     d["_data_str"] = d["_data"].dt.strftime("%d/%m/%Y")
     eh_hoje = d["_data_str"] == hoje_str
     d["_vol_efetivo"] = d["_volume"]
@@ -1270,28 +1274,21 @@ def processar_volume_rv(df_pedidos, mes_ref=None):
         "MATCH",
     }
 
-    d = df_pedidos[(df_pedidos["_volume"] > 0) & (df_pedidos["_data"].notna())]
-    linhas = []
-    for _, row in d.iterrows():
-        cats = row.get("_categorias") or []
-        if not cats:
-            continue
-        _m = row["_data"].strftime("%Y-%m")  # mês REAL da linha
-        for cat in cats:
-            if cat in cats_rv:
-                linhas.append({
-                    "setor": row["_setor"],
-                    "categoria": cat,
-                    "volume": row["_volume"],
-                    "mes_ref": _m,
-                })
-
-    if not linhas:
+    # VETORIZADO (memória/CPU no Render free): explode as categorias em vez de
+    # iterar linha a linha o arquivo inteiro.
+    m = (df_pedidos["_volume"] > 0) & (df_pedidos["_data"].notna())
+    d = pd.DataFrame({
+        "setor": df_pedidos.loc[m, "_setor"].values,
+        "mes_ref": df_pedidos.loc[m, "_data"].dt.strftime("%Y-%m").values,  # mês REAL da linha
+        "volume": df_pedidos.loc[m, "_volume"].values,
+        "categoria": df_pedidos.loc[m, "_categorias"].values,
+    }).explode("categoria")
+    d = d[d["categoria"].isin(cats_rv)]
+    if d.empty:
         return
 
-    df_rv = pd.DataFrame(linhas)
     resultado = (
-        df_rv.groupby(["setor", "categoria", "mes_ref"])["volume"]
+        d.groupby(["setor", "categoria", "mes_ref"])["volume"]
         .sum()
         .reset_index()
     )
