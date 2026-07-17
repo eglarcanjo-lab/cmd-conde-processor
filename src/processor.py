@@ -3750,10 +3750,11 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
       Segmento  = Off_Independente / On_Trade
       KPIs OK   = quantos dos 4 pilares o RN bateu (0-4)
       AP OK     = Sim/Não — RN com Atendimento Produtivo
-      Meta/Real/GAP       = Positivação Tasks Compra
-      Meta.1/Real.1/GAP.1 = Carteira Ideal (Compradores)
-      Meta.2/Real.2/GAP.2 = GPS
-      Meta.3/Real.3/GAP.3 = Rota Efetiva
+      Layout ATUAL do BI (mudou — 3 formatos diferentes por KPI):
+        Positivação (Tasks): Meta='52.6%' · Visitas Positivadas='56.6%' (=real) · GAP  [% em texto]
+        Carteira (Compradores): Meta.1='100' · Real='134' · GAP.1                       [contagem]
+        GPS: Meta.2='0.882' · Real.1='1.244' · GAP.2                                     [fração 0-1]
+        Rota Efetiva: Meta.3='0.8' · Real.2='0.995' · GAP.3                              [fração 0-1]
     Gera: spo_ap_resumo e spo_ap_detalhe
     """
     import io as _io
@@ -3772,8 +3773,18 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
         df = df[df["setor"].isin(SETORES_LOCAL)].copy()
         print(f"  RNs nos setores locais: {len(df)}")
 
-        def pct(v):
-            try: return round(float(v) * 100, 1)
+        # 3 formatos: % em texto ("52.6%"), fração (0-1 → ×100) e contagem (134).
+        def _pstr(v):   # "52.6%" → 52.6
+            s = str(v).replace("%", "").replace(",", ".").strip()
+            try: return round(float(s), 1)
+            except: return None
+        def _pfrac(v):  # "0.882" → 88.2
+            s = str(v).replace(",", ".").strip()
+            try: return round(float(s) * 100, 1)
+            except: return None
+        def _inteiro(v):  # "134" → 134
+            s = str(v).replace(",", ".").strip()
+            try: return int(round(float(s)))
             except: return None
 
         mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
@@ -3787,22 +3798,22 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
                 "segmento":        str(row.get("Segmento","")).strip(),
                 "ap_ok":           str(row.get("AP OK","")).strip(),
                 "kpis_ok":         str(row.get("KPIs OK","")).strip(),
-                # Positivação Tasks Compra
-                "positiv_meta":    pct(row.get("Meta","")),
-                "positiv_real":    pct(row.get("Real","")),
-                "positiv_gap":     pct(row.get("GAP","")),
-                # Carteira Ideal
-                "carteira_meta":   str(row.get("Meta.1","")).strip(),
-                "carteira_real":   str(row.get("Real.1","")).strip(),
-                "carteira_gap":    str(row.get("GAP.1","")).strip(),
-                # GPS
-                "gps_meta":        pct(row.get("Meta.2","")),
-                "gps_real":        pct(row.get("Real.2","")),
-                "gps_gap":         pct(row.get("GAP.2","")),
-                # Rota Efetiva
-                "rota_meta":       pct(row.get("Meta.3","")),
-                "rota_real":       pct(row.get("Real.3","")),
-                "rota_gap":        pct(row.get("GAP.3","")),
+                # Positivação Tasks Compra (Meta / Visitas Positivadas / GAP — % em texto)
+                "positiv_meta":    _pstr(row.get("Meta","")),
+                "positiv_real":    _pstr(row.get("Visitas Positivadas","")),
+                "positiv_gap":     _pstr(row.get("GAP","")),
+                # Carteira Ideal / Compradores (Meta.1 / Real / GAP.1 — contagem)
+                "carteira_meta":   _inteiro(row.get("Meta.1","")),
+                "carteira_real":   _inteiro(row.get("Real","")),
+                "carteira_gap":    _inteiro(row.get("GAP.1","")),
+                # GPS (Meta.2 / Real.1 / GAP.2 — fração)
+                "gps_meta":        _pfrac(row.get("Meta.2","")),
+                "gps_real":        _pfrac(row.get("Real.1","")),
+                "gps_gap":         _pfrac(row.get("GAP.2","")),
+                # Rota Efetiva (Meta.3 / Real.2 / GAP.3 — fração)
+                "rota_meta":       _pfrac(row.get("Meta.3","")),
+                "rota_real":       _pfrac(row.get("Real.2","")),
+                "rota_gap":        _pfrac(row.get("GAP.3","")),
                 "mes_referencia":  mes_ref,
             })
 
@@ -3816,14 +3827,14 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
             rv_ap_rows.append({
                 "setor":               row["setor"],
                 "mes_referencia":      mes_ref,
-                "tasks_compra_real":   pct(row.get("Real", "")),
-                "tasks_compra_meta":   pct(row.get("Meta", "")),
-                "compradores_real":    str(row.get("Real.1", "")).strip(),
-                "compradores_meta":    str(row.get("Meta.1", "")).strip(),
-                "rota_efetiva_real":   pct(row.get("Real.3", "")),
-                "rota_efetiva_meta":   pct(row.get("Meta.3", "")),
-                "gps_real":            pct(row.get("Real.2", "")),
-                "gps_meta":            pct(row.get("Meta.2", "")),
+                "tasks_compra_real":   _pstr(row.get("Visitas Positivadas", "")),
+                "tasks_compra_meta":   _pstr(row.get("Meta", "")),
+                "compradores_real":    _inteiro(row.get("Real", "")),
+                "compradores_meta":    _inteiro(row.get("Meta.1", "")),
+                "rota_efetiva_real":   _pfrac(row.get("Real.2", "")),
+                "rota_efetiva_meta":   _pfrac(row.get("Meta.3", "")),
+                "gps_real":            _pfrac(row.get("Real.1", "")),
+                "gps_meta":            _pfrac(row.get("Meta.2", "")),
                 "ap_ok":               ap_ok_val,
             })
         df_rv_ap = pd.DataFrame(rv_ap_rows)
