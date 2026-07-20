@@ -431,6 +431,53 @@ def processar_buffer(conteudo_bytes):
     return out
 
 
+def processar_pedidos_historico(conteudo_bytes):
+    """Import HISTÓRICO de pedidos (meses antigos, ex.: 2025). Popula SÓ as tabelas que
+    ACUMULAM por mês — vendas_cliente_produto, vd_pdv, vd_produto, rv_volume — e NÃO toca
+    nos snapshots do mês corrente (cobertura, pdv_mix, rank_clientes, entregas_efetivadas,
+    ruptura_detalhe, volume_diario). Cada mês substitui só o seu mês. Leve de memória."""
+    import gc
+    print("📂 Import HISTÓRICO de pedidos (só tabelas mensais)...")
+    COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
+                   "Nome Prod.", "Volume Entrega", "Volume Marcacao"}
+    df = ler_csv_inf(conteudo_bytes, usecols=lambda c: c.strip() in COLS_USADAS)
+    df.columns = [c.strip() for c in df.columns]
+    df["_setor"] = df["Setor"].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+    df["_data"] = pd.to_datetime(df["Data"].str.strip(), format="%d/%m/%Y", errors="coerce")
+    df = df[df["_data"].notna()]
+    if df.empty:
+        atualizar_status_arquivo("Pedidos (histórico)", "⚠️ vazio", "nenhuma linha válida")
+        return {"linhas": 0, "meses": []}
+
+    df_prods_base = ler_aba("produtos_base")
+    mapa_produtos = carregar_base_produtos(df_prods_base) if not df_prods_base.empty else {}
+    cod_norm = df["Cod. Prod."].astype(str).str.strip().str.lstrip("0").replace("", "0")
+    df["_categorias"] = cod_norm.map(mapa_produtos)
+    df["_categorias"] = df["_categorias"].apply(lambda x: x if isinstance(x, list) else [])
+    df["_categoria"]  = df["_categorias"].apply(lambda x: x[0] if x else None)
+    del cod_norm; gc.collect()
+
+    df["_volume"] = pd.to_numeric(
+        df["Volume Entrega"].astype(str).str.replace(",", ".", regex=False).str.strip(), errors="coerce").fillna(0.0)
+    df["_volume_marcacao"] = pd.to_numeric(
+        df.get("Volume Marcacao", pd.Series(index=df.index, dtype=str)).astype(str)
+          .str.replace(",", ".", regex=False).str.strip(), errors="coerce").fillna(0.0)
+    df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0").str.strip()
+    gc.collect()
+
+    _processar_vendas_cliente(df); gc.collect()   # vendas_cliente_produto (por mês)
+    _processar_vendas_diaria(df);  gc.collect()   # vd_pdv / vd_produto (por mês)
+    processar_volume_rv(df);       gc.collect()   # rv_volume (por mês)
+
+    meses = sorted(df["_data"].dt.strftime("%Y-%m").unique().tolist())
+    n = len(df)
+    del df; gc.collect()
+    atualizar_status_arquivo("Pedidos (histórico)", "✅ OK", f"{n} linhas · meses {','.join(meses)}")
+    print(f"  ✅ Histórico: {n} linhas · meses {meses}")
+    return {"linhas": n, "meses": meses}
+
+
 def _processar_vendas_diaria(df):
     """Volume diário por PDV e por produto (setor x cod x DIA), acumulado mês a mês.
     Base da comparação D-1 acumulada no dashboard (dia 01..D-1 deste mês vs mês anterior).
