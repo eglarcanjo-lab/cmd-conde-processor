@@ -1678,7 +1678,9 @@ def calcular_rv_completa(mes_ref=None):
         pontos_meta = META_PONTOS_BEES
         pct_pontos  = min((pontos_real / pontos_meta * 100) if pontos_meta > 0 else 0, 150)
         peso_pontos = w["pontos"]
-        rv_pontos   = (po_total * peso_pontos / 100) * (pct_pontos / 100) if ap_ok == "OK" else 0
+        # AP não bloqueia mais a RV — o Pontos Force paga independente do Atendimento
+        # Produtivo (ap_ok segue gravado em rv_resultado apenas como informativo).
+        rv_pontos   = (po_total * peso_pontos / 100) * (pct_pontos / 100)
 
         # Metas vêm da planilha; PESOS são fixos por segmento
         meta_cerv = metas_map.get(setor, {}).get("CERVEJA", {}).get("meta", 0)
