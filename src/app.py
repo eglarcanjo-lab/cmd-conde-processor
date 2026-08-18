@@ -786,7 +786,7 @@ def upload_spo_ap():
 #  • BI: "#<item>" (#1, #5, #7, ...) · "task" → Tasks · "pontos"/"bees" → Pontos Bees
 ROTINAS = {
     "0105070402": "clientes", "03014701": "pedidos", "0111": "produtos_base",
-    "030509": "faturamento_mktp", "120601": "inadimplencia", "030204": "devolucoes",
+    "030509": "faturamento_mktp", "120601": "inadimplencia", "030224": "devolucoes",
     "020304": "grade",
 }
 ITENS_BI = {
