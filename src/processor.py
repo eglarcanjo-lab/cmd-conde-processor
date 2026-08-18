@@ -285,6 +285,21 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
         sobrescrever_aba("pedido_chave", chave)
         print(f"  🔑 pedido_chave: {len(chave)} linhas (nº pedido × tipo operação)")
 
+        # ── Produtos por pedido (drill-down do Faturados × Buffer) ────────────
+        # nº pedido × produto → volume marcação. Snapshot (substitui a cada import).
+        prod_ped = pd.DataFrame({
+            "num_pedido": _num_ped,
+            "cod_produto": df["Cod. Prod."].astype(str).str.strip().str.lstrip("0"),
+            "nome_produto": df["Nome Prod."].astype(str).str.strip(),
+            "volume_marcacao": df["_volume_marcacao"],
+        })
+        prod_ped = prod_ped[prod_ped["num_pedido"] != ""]
+        prod_ped = prod_ped.groupby(
+            ["num_pedido", "cod_produto", "nome_produto"], as_index=False)["volume_marcacao"].sum()
+        prod_ped["volume_marcacao"] = prod_ped["volume_marcacao"].round(3)
+        sobrescrever_aba("pedido_produtos", prod_ped)
+        print(f"  🧾 pedido_produtos: {prod_ped['num_pedido'].nunique()} pedidos · {len(prod_ped)} linhas")
+
     hoje = date.today()
     mes_atual = hoje.replace(day=1)
     mes_anterior = (mes_atual - pd.DateOffset(months=1)).date()
