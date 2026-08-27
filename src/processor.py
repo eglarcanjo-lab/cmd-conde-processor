@@ -2625,6 +2625,91 @@ def processar_score5(conteudo_bytes, mes_ref=None):
         return pd.DataFrame()
 
 
+# ─── SPO — ROTINA+ (% de Visitas Medianas ou Excelentes) ─────────────────────
+META_ROTINA_MAIS = 49  # meta TRI (%)
+
+def processar_rotina_mais(conteudo_bytes, mes_ref=None):
+    """Rotina+ (SPO) — KPI '% de Visitas Medianas ou Excelentes'. Export do BI, visita a
+    visita (já traz Passo 2-6 OK/NOK, Qtd Passos OK e Cluster Visita). Apuradas = GPS OK.
+    Crítica ≤2 passos, Mediana 3, Excelente ≥4. KPI = (Med+Exc)/apuradas.
+    Gera spo_rotina_mais_resumo (setor + OPERACAO, com abertura por passo) e _detalhe."""
+    import io
+    print("📂 Processando Rotina+ (SPO)...")
+    mes_ref = mes_ref or date.today().strftime("%Y-%m")
+    try:
+        try:
+            df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str, sheet_name="Export")
+        except Exception:
+            df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+        df.columns = [str(c).strip() for c in df.columns]
+
+        c_setor = next((c for c in df.columns if c.strip().lower() == "setor"), None)
+        c_pdv   = next((c for c in df.columns if "cod pdv" in c.strip().lower()), None)
+        c_nome  = next((c for c in df.columns if "nome pdv" in c.strip().lower()), None)
+        c_gps   = next((c for c in df.columns if c.strip().upper() == "GPS"), None)
+        c_cl    = next((c for c in df.columns if "cluster visita" in c.strip().lower()), None)
+        c_qtd   = next((c for c in df.columns if "qtd" in c.strip().lower() and "passo" in c.strip().lower()), None)
+        if not all([c_setor, c_gps, c_cl]):
+            raise ValueError(f"Colunas Setor/GPS/Cluster não encontradas. Disponíveis: {df.columns.tolist()}")
+        passos = [c for c in df.columns if c.strip().lower().startswith("passo ")]
+
+        df["_setor"] = df[c_setor].apply(normalizar_setor)
+        df = df[df["_setor"].isin(SETORES_VALIDOS)]
+        if c_pdv:
+            df = df[df[c_pdv].notna() & (df[c_pdv].astype(str).str.strip() != "")]
+        df["_gps"] = df[c_gps].astype(str).str.strip().str.upper()
+        df["_cl"]  = df[c_cl].astype(str).str.strip().str.lower()
+        g = df[df["_gps"] == "OK"].copy()
+
+        def _linha(setor, sub):
+            base = len(sub)
+            cri = int(sub["_cl"].isin(["critico", "crítico"]).sum())
+            med = int((sub["_cl"] == "mediano").sum())
+            exc = int((sub["_cl"] == "excelente").sum())
+            pct_me = round((med + exc) / base * 100, 1) if base > 0 else 0
+            row = {
+                "setor": setor, "visitas": base, "criticas": cri, "medianas": med, "excelentes": exc,
+                "pct_critica":   round(cri / base * 100, 1) if base > 0 else 0,
+                "pct_mediana":   round(med / base * 100, 1) if base > 0 else 0,
+                "pct_excelente": round(exc / base * 100, 1) if base > 0 else 0,
+                "pct_med_exc":   pct_me,
+                "meta": META_ROTINA_MAIS, "ok": "OK" if pct_me >= META_ROTINA_MAIS else "NOK",
+                "mes_referencia": mes_ref,
+            }
+            for pc in passos:
+                key = "passo" + "".join(ch for ch in pc if ch.isdigit())
+                okp = int((sub[pc].astype(str).str.strip().str.upper() == "OK").sum())
+                row[key] = round(okp / base * 100, 1) if base > 0 else 0
+            return row
+
+        resumo, detalhe = [], []
+        for setor, sub in g.groupby("_setor"):
+            resumo.append(_linha(setor, sub))
+            for _, r in sub.iterrows():
+                detalhe.append({
+                    "setor": setor,
+                    "cod_pdv": (str(r[c_pdv]).strip() if c_pdv else ""),
+                    "nome_pdv": (str(r[c_nome]).strip() if c_nome else ""),
+                    "cluster": str(r[c_cl]).strip(),
+                    "qtd_passos_ok": (str(r[c_qtd]).strip() if c_qtd else ""),
+                    "mes_referencia": mes_ref,
+                })
+        resumo.append(_linha("OPERACAO", g))
+
+        sobrescrever_aba("spo_rotina_mais_resumo", pd.DataFrame(resumo))
+        sobrescrever_aba("spo_rotina_mais_detalhe", pd.DataFrame(detalhe))
+        op = resumo[-1]
+        atualizar_status_arquivo("SPO - Rotina+", "✅ OK",
+                                 f"Operação: {op['pct_med_exc']}% Med+Exc ({op['medianas']+op['excelentes']}/{op['visitas']} visitas)")
+        print(f"  ✅ Rotina+: {op['pct_med_exc']}% operação Med+Exc ({op['visitas']} visitas GPS OK)")
+        return pd.DataFrame(resumo)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"  ❌ Erro: {e}")
+        return pd.DataFrame()
+
+
 # ─── SPO — TAREFAS DE VOLUME (Item 14) ───────────────────────────────────────
 
 META_TASKS_VOLUME = 60  # Placeholder

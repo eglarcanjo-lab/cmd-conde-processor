@@ -6,7 +6,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_pedidos_historico
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_pedidos_historico
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -243,6 +243,7 @@ def upload_ambos():
             resultados["tasks"] = f"❌ Erro: {str(e)[:100]}"
 
     _rodar_spo(arquivos, "spo_score5",          processar_score5,                resultados, _mes_ref, msg="Score 5 processado")
+    _rodar_spo(arquivos, "spo_rotina_mais",     processar_rotina_mais,           resultados, _mes_ref, msg="Rotina+ processado")
     _rodar_spo(arquivos, "spo_cupons",          processar_cupons_digitais,       resultados, _mes_ref, msg="Cupons Digitais processado")
     _rodar_spo(arquivos, "spo_loja_ideal",      processar_loja_ideal,            resultados, _mes_ref, msg="Loja Ideal processado")
     _rodar_spo(arquivos, "spo_scanntech",       processar_scanntech,             resultados, _mes_ref, msg="Scanntech processado")
@@ -874,6 +875,8 @@ def upload_zip():
                 processar_aba_promocao(b, mes_ref=mes_ref)
             elif campo == "spo_score5":
                 processar_score5(b, mes_ref=mes_ref)
+            elif campo == "spo_rotina_mais":
+                processar_rotina_mais(b, mes_ref=mes_ref)
             elif campo == "spo_alone":
                 processar_pedido_alone(b, mes_ref=mes_ref)
             elif campo == "spo_rgb":
