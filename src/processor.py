@@ -300,6 +300,32 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
         sobrescrever_aba("pedido_produtos", prod_ped)
         print(f"  🧾 pedido_produtos: {prod_ped['num_pedido'].nunique()} pedidos · {len(prod_ped)} linhas")
 
+        # ── Detalhe de pedidos do SKU dos Verdes (33857) p/ export Excel ──────
+        # Linha a linha: nº pedido, NF, data, PDV, produto, volume. Acumula por mês.
+        try:
+            _SKU_V = "33857"
+            _codn = df["Cod. Prod."].astype(str).str.strip().str.lstrip("0")
+            dv = df[_codn == _SKU_V]
+            if not dv.empty:
+                _dt = pd.to_datetime(dv["Data"].astype(str).str.strip(), format="%d/%m/%Y", errors="coerce")
+                det_v = pd.DataFrame({
+                    "num_pedido":   dv[_col_pedido].astype(str).str.strip().str.lstrip("0").values,
+                    "nota_fiscal":  (dv["Nota Fiscal"].astype(str).str.strip().values if "Nota Fiscal" in dv.columns else ""),
+                    "data":         dv["Data"].astype(str).str.strip().values,
+                    "setor":        dv["_setor"].values,
+                    "cod_pdv":      dv["_cod_pdv"].values,
+                    "nome_pdv":     (dv["Nome Cliente"].astype(str).str.strip().values if "Nome Cliente" in dv.columns else ""),
+                    "cod_produto":  _SKU_V,
+                    "nome_produto": dv["Nome Prod."].astype(str).str.strip().values,
+                    "volume_hl":    dv["_volume"].round(3).values,
+                    "mes_referencia": _dt.dt.strftime("%Y-%m").values,
+                })
+                det_v = det_v[det_v["mes_referencia"].notna() & (det_v["mes_referencia"] != "")]
+                sobrescrever_por_mes("verdes_pedidos", det_v, "mes_referencia")
+                print(f"  🌿 verdes_pedidos (SKU {_SKU_V}): {len(det_v)} linhas")
+        except Exception as _ev:
+            print(f"  ⚠️ verdes_pedidos: {_ev}")
+
     hoje = date.today()
     mes_atual = hoje.replace(day=1)
     mes_anterior = (mes_atual - pd.DateOffset(months=1)).date()
