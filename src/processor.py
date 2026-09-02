@@ -1284,31 +1284,52 @@ def _gerar_produtos_full(df):
 
 
 def processar_grade_estoque(conteudo_bytes):
-    """Grade de estoque (saldo Disp por produto) — atualizada ~3x/dia.
-    Layout posicional: 0 Grade · 1 Cod · 2 Descricao · 3 UN · 9 Saidas · 11 Disp.
-    Junta com produtos_full p/ trazer o nome completo + HL por caixa.
-    Gera a aba grade_estoque (só itens com saldo > 0).
+    """Grade de estoque (saldo Disp por produto) — sistema CORA. CSV `;` com colunas
+    nomeadas: CodigoProduto; DescricaoProduto; UnidadeMedida; GradeEstoque;
+    GradeCadastrada; Reserva; Saida; SaldoDisponivel. Fallback p/ o layout posicional
+    antigo. Junta produtos_full p/ nome + HL/caixa. Gera grade_estoque (saldo > 0).
     """
     print("📂 Processando grade de estoque...")
     df = ler_csv_inf(conteudo_bytes)
-    cols = list(df.columns)
-    if len(cols) < 12:
-        raise ValueError(f"Grade de estoque com estrutura inesperada: {len(cols)} colunas.")
+    df.columns = [str(c).strip() for c in df.columns]
 
-    def col(i):
-        return df[cols[i]].astype(str).str.strip()
+    def _acha(*nomes):
+        for nm in nomes:
+            for c in df.columns:
+                if c.strip().lower() == nm.lower():
+                    return c
+        return None
 
     def to_int(s):
-        return pd.to_numeric(s.str.replace(r"\D", "", regex=True), errors="coerce").fillna(0).astype(int)
+        return pd.to_numeric(s.astype(str).str.replace(r"[^\d-]", "", regex=True), errors="coerce").fillna(0).astype(int)
 
-    g = pd.DataFrame({
-        "grade":     col(0),
-        "cod":       col(1).str.lstrip("0"),
-        "descricao": col(2),
-        "un":        col(3),
-        "saidas":    to_int(col(9)),
-        "saldo":     to_int(col(11)),   # Disp. = saldo atual
-    })
+    c_cod  = _acha("CodigoProduto", "Codigo", "Cod")
+    c_disp = _acha("SaldoDisponivel", "SaldoDisponível", "Saldo Disponivel", "Disp")
+
+    if c_cod and c_disp:
+        # ── Novo formato CORA (colunas nomeadas) ──
+        c_desc  = _acha("DescricaoProduto", "Descricao", "Descrição")
+        c_un    = _acha("UnidadeMedida", "Unidade", "UN")
+        c_said  = _acha("Saida", "Saidas", "Saída")
+        c_grade = _acha("GradeEstoque", "Grade")
+        g = pd.DataFrame({
+            "grade":     (df[c_grade].astype(str).str.strip() if c_grade else "1"),
+            "cod":       df[c_cod].astype(str).str.strip().str.lstrip("0"),
+            "descricao": (df[c_desc].astype(str).str.strip() if c_desc else ""),
+            "un":        (df[c_un].astype(str).str.strip() if c_un else ""),
+            "saidas":    (to_int(df[c_said]) if c_said else 0),
+            "saldo":     to_int(df[c_disp]),   # SaldoDisponivel = Disp
+        })
+    else:
+        # ── Fallback: layout posicional antigo (0 Grade · 1 Cod · 2 Desc · 3 UN · 9 Saidas · 11 Disp) ──
+        cols = list(df.columns)
+        if len(cols) < 12:
+            raise ValueError(f"Grade com estrutura inesperada: {len(cols)} colunas / cabeçalhos {cols[:8]}.")
+        col = lambda i: df[cols[i]].astype(str).str.strip()
+        g = pd.DataFrame({
+            "grade": col(0), "cod": col(1).str.lstrip("0"), "descricao": col(2),
+            "un": col(3), "saidas": to_int(col(9)), "saldo": to_int(col(11)),
+        })
     g = g[g["saldo"] > 0].copy()
 
     # Junta nome completo + HL/caixa da base
