@@ -2713,15 +2713,20 @@ def processar_rotina_mais(conteudo_bytes, mes_ref=None):
         df = df[df["_setor"].isin(SETORES_VALIDOS)]
         if c_pdv:
             df = df[df[c_pdv].notna() & (df[c_pdv].astype(str).str.strip() != "")]
+        import unicodedata
+        def _norm(s):
+            s = unicodedata.normalize("NFKD", str(s))
+            return "".join(c for c in s if not unicodedata.combining(c)).strip().lower()
         df["_gps"] = df[c_gps].astype(str).str.strip().str.upper()
-        df["_cl"]  = df[c_cl].astype(str).str.strip().str.lower()
+        # Sem acento/case e por prefixo → cobre critico|critica, mediano|mediana, excelente.
+        df["_cl"]  = df[c_cl].apply(_norm)
         g = df[df["_gps"] == "OK"].copy()
 
         def _linha(setor, sub):
             base = len(sub)
-            cri = int(sub["_cl"].isin(["critico", "crítico"]).sum())
-            med = int((sub["_cl"] == "mediano").sum())
-            exc = int((sub["_cl"] == "excelente").sum())
+            cri = int(sub["_cl"].str.startswith("crit").sum())
+            med = int(sub["_cl"].str.startswith("median").sum())
+            exc = int(sub["_cl"].str.startswith("excelen").sum())
             pct_me = round((med + exc) / base * 100, 1) if base > 0 else 0
             row = {
                 "setor": setor, "visitas": base, "criticas": cri, "medianas": med, "excelentes": exc,
