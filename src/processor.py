@@ -109,6 +109,15 @@ def dia_semana_hoje():
     return agora.weekday()
 
 
+def hoje_brasilia():
+    """Data de HOJE no fuso de Brasília. O Render roda em UTC, então date.today()
+    'vira' o dia por volta das 21h (BRT), quebrando a regra 'dia atual usa Volume
+    Marcação' do Volume Diário (a marcação de hoje virava dia-passado e sumia)."""
+    from datetime import datetime
+    import pytz
+    return datetime.now(pytz.timezone("America/Sao_Paulo")).date()
+
+
 def processar_clientes(conteudo_bytes):
     """
     Processa o arquivo 0105070402 (base de clientes/PDVs).
@@ -553,7 +562,7 @@ def _processar_vendas_cliente(df_mes):
     Regra do DIA ATUAL: hoje usa Volume Marcação (ainda não há faturamento);
     dias anteriores usam Volume Entrega — mesma lógica do Volume Diário."""
     cols_vazio = ["setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "volume_hl", "mes_referencia"]
-    hoje_str = date.today().strftime("%d/%m/%Y")
+    hoje_str = hoje_brasilia().strftime("%d/%m/%Y")
     # MEMÓRIA (Render free 512MB): copia SÓ as colunas usadas — o df completo tem
     # _categorias (listas Python, pesadas) e mais ~10 colunas que não entram aqui.
     _COLS = ["_data", "_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod.",
@@ -787,7 +796,7 @@ def _processar_volume_diario(df):
     No dia seguinte o que foi faturado já entra no Volume Entrega e o racional
     "pula" para o novo dia atual.
     """
-    hoje_str = date.today().strftime("%d/%m/%Y")
+    hoje_str = hoje_brasilia().strftime("%d/%m/%Y")
     df_d = df.copy()
     df_d["_data_str"] = df_d["_data"].dt.strftime("%d/%m/%Y")
 
