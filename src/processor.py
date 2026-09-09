@@ -2771,6 +2771,86 @@ def processar_rotina_mais(conteudo_bytes, mes_ref=None):
         return pd.DataFrame()
 
 
+# ─── ROTA EFETIVA (BI de produtividade de visitas) ───────────────────────────
+def _re_linha(setor, mes, sub):
+    tot = len(sub)
+    ef  = int(sub["_ef"].sum())
+    gps = int(sub["_gps"].sum())
+    sup = int(sub["_sup"].sum())
+    return {
+        "setor": setor, "mes_referencia": mes,
+        "planejadas": tot, "efetivas": ef,
+        "re_pct": round(ef / tot * 100, 1) if tot else 0,
+        "gps_ok": gps, "gps_pct": round(gps / tot * 100, 1) if tot else 0,
+        "supervisitas": sup,
+    }
+
+
+def processar_rota_efetiva(conteudo_bytes, mes_ref=None):
+    """Rota Efetiva (BI). 1 linha por visita planejada. RE% = Visita Efetiva=1 /
+    planejadas (excluindo dias expurgados). Gera:
+      - rota_efetiva_resumo: setor × mês (+ OPERACAO) → planejadas, efetivas, RE%, GPS%, supervisitas
+      - rota_efetiva_pdv:    cod_pdv × mês → planejadas, efetivas, ult_visita
+    Acumula por mês (o arquivo traz o ano todo)."""
+    import io
+    print("📂 Processando Rota Efetiva...")
+    try:
+        try:
+            df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str, sheet_name="Export")
+        except Exception:
+            df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str)
+        df.columns = [str(c).strip() for c in df.columns]
+        low = {c.strip().lower(): c for c in df.columns}
+        col = lambda *names: next((low[n.lower()] for n in names if n.lower() in low), None)
+        c_setor = col("Setor"); c_pdv = col("PDV"); c_dia = col("Dia de Visita")
+        c_ef = col("Visita Efetiva"); c_exp = col("Flag Dia Expurgado"); c_gps = col("GPS Check In OK")
+        c_sup = col("É Supervisita?", "É Supervisita?", "Supervisita?")
+        if not all([c_setor, c_pdv, c_dia, c_ef]):
+            raise ValueError(f"Colunas essenciais ausentes. Disponíveis: {df.columns.tolist()[:40]}")
+
+        df["_setor"] = df[c_setor].apply(normalizar_setor)
+        df = df[df["_setor"].isin(SETORES_VALIDOS)].copy()
+        dia = pd.to_datetime(df[c_dia].astype(str).str.strip(), errors="coerce", dayfirst=True)
+        df["_mes"] = dia.dt.strftime("%Y-%m")
+        df["_dia_iso"] = dia.dt.strftime("%Y-%m-%d")
+        df = df[df["_mes"].notna() & (df["_mes"] != "")]
+        df["_pdv"] = df[c_pdv].astype(str).str.strip().str.lstrip("0")
+        df["_exp"] = df[c_exp].astype(str).str.strip().str.lower().eq("sim") if c_exp else False
+        df["_ef"]  = df[c_ef].astype(str).str.strip().eq("1")
+        df["_gps"] = df[c_gps].astype(str).str.strip().eq("1") if c_gps else False
+        df["_sup"] = df[c_sup].astype(str).str.strip().eq("1") if c_sup else False
+
+        plan = df[~df["_exp"]].copy()  # planejadas (fora dias expurgados)
+        if plan.empty:
+            raise ValueError("Sem linhas válidas após filtro de setor/expurgo.")
+
+        resumo = []
+        for (setor, mes), sub in plan.groupby(["_setor", "_mes"]):
+            resumo.append(_re_linha(setor, mes, sub))
+        for mes, sub in plan.groupby("_mes"):
+            resumo.append(_re_linha("OPERACAO", mes, sub))
+        sobrescrever_por_mes("rota_efetiva_resumo", pd.DataFrame(resumo), "mes_referencia")
+
+        rows = []
+        for (setor, pdv, mes), sub in plan.groupby(["_setor", "_pdv", "_mes"]):
+            ef = int(sub["_ef"].sum())
+            ult = sub.loc[sub["_ef"], "_dia_iso"].max() if ef else ""
+            rows.append({"setor": setor, "cod_pdv": pdv, "planejadas": len(sub), "efetivas": ef,
+                         "ult_visita": ult if isinstance(ult, str) else "", "mes_referencia": mes})
+        sobrescrever_por_mes("rota_efetiva_pdv", pd.DataFrame(rows), "mes_referencia")
+
+        meses = sorted(plan["_mes"].dropna().unique().tolist())
+        atualizar_status_arquivo("Rota Efetiva", "✅ OK", f"{len(plan)} visitas · meses {meses[0]}–{meses[-1]}")
+        print(f"  ✅ Rota Efetiva: {len(plan)} planejadas, meses {meses}")
+        return pd.DataFrame(resumo)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        atualizar_status_arquivo("Rota Efetiva", "❌ ERRO", str(e)[:200])
+        print(f"  ❌ Erro Rota Efetiva: {e}")
+        return pd.DataFrame()
+
+
 # ─── SPO — TAREFAS DE VOLUME (Item 14) ───────────────────────────────────────
 
 META_TASKS_VOLUME = 60  # Placeholder

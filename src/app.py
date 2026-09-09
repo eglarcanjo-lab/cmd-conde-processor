@@ -6,7 +6,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_pedidos_historico
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_pedidos_historico, processar_rota_efetiva
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -249,6 +249,7 @@ def upload_ambos():
     _rodar_spo(arquivos, "spo_scanntech",       processar_scanntech,             resultados, _mes_ref, msg="Scanntech processado")
     _rodar_spo(arquivos, "spo_portfolio_ideal", processar_portfolio_ideal,       resultados, _mes_ref, msg="Portfólio Ideal processado")
     _rodar_spo(arquivos, "spo_ap",              processar_atendimento_produtivo, resultados, _mes_ref, msg="Atendimento Produtivo processado")
+    _rodar_spo(arquivos, "rota_efetiva",        processar_rota_efetiva,          resultados, _mes_ref, msg="Rota Efetiva processada")
     _rodar_spo(arquivos, "spo_rgb",             processar_rgb,                   resultados, _mes_ref, msg="+RGB processado")
     _rodar_spo(arquivos, "spo_alone",           processar_pedido_alone,          resultados, _mes_ref, msg="Pedido Alone processado")
 
