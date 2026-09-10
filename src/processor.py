@@ -2815,7 +2815,9 @@ def processar_rota_efetiva(conteudo_bytes, mes_ref=None):
 
         df["_setor"] = df[c_setor].apply(normalizar_setor)
         df = df[df["_setor"].isin(SETORES_VALIDOS)].copy()
-        dia = pd.to_datetime(df[c_dia].astype(str).str.strip(), errors="coerce", dayfirst=True)
+        # "Dia de Visita" vem em ISO (YYYY-MM-DD HH:MM:SS). NÃO usar dayfirst=True:
+        # com dayfirst o pandas falha em todo dia > 12 (dropava ~60% das linhas).
+        dia = pd.to_datetime(df[c_dia].astype(str).str.strip(), errors="coerce")
         df["_mes"] = dia.dt.strftime("%Y-%m")
         df["_dia_iso"] = dia.dt.strftime("%Y-%m-%d")
         df = df[df["_mes"].notna() & (df["_mes"] != "")]
