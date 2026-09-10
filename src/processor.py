@@ -2556,11 +2556,14 @@ META_SCORE5 = 46  # % — ajustar quando metas oficiais chegarem
 def processar_score5(conteudo_bytes, mes_ref=None):
     """
     Processa o relatório de Task de Faturamento (Score 5 / SPO Item 12).
-    Base "task fat": cada linha é um PDV. A coluna **TASK FAT** (col T) marca
-    com "1" quando o PDV bateu a task de faturamento.
-      realizado (pdvs_ok) = nº de PDVs com TASK FAT == 1
-      universo (pdvs_total) = PDVs que POSSUEM task de fat (POSSUI TASK == 1);
-        se a coluna não existir/vier vazia, cai para o total de PDVs do relatório.
+    Base "task fat": cada linha é um PDV score 5. A coluna **TASK FAT** (col T)
+    marca "1" quando o PDV validou a task de faturamento.
+    FÓRMULA OFICIAL (doc do KPI):
+      % = (PDVs com task VALIDADA  +  PDVs SEM task) / PDVs TOTAIS score 5
+      → PDV que NÃO recebeu a task de faturamento conta como OK.
+      pdvs_ok    = TASK FAT==1  OU  sem task (POSSUI TASK != S)
+      pdvs_total = TODOS os PDVs score 5 do relatório (não só os com task)
+    TRI = média ponderada: soma(pdvs_ok) / soma(pdvs_total) mês a mês.
     Gera duas abas:
       - spo_score5_resumo  : setor | pdvs_total | pdvs_ok | pct | sem_task | meta | ok | mes_referencia
       - spo_score5_detalhe : setor | cod_pdv | nome_pdv | bateu | possui_task |
@@ -2616,19 +2619,21 @@ def processar_score5(conteudo_bytes, mes_ref=None):
         df["_possui"] = df[c_possui].apply(_um) if c_possui else True
         # PDV com task = POSSUI TASK==1; quem bateu (TASK FAT==1) também conta como tendo task
         df["_comtask"] = df["_possui"] | df["_bateu"]
+        # Fórmula oficial: % = (PDVs com task validada + PDVs SEM task) / PDVs totais score 5.
+        # PDV que NÃO recebeu task de faturamento conta como OK. Denominador = TODOS.
+        df["_okfinal"] = df["_bateu"] | (~df["_comtask"])
 
         mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes")
 
         def _base(grp):
-            """Universo do KPI: PDVs com task; se nenhum marcado, usa total do relatório."""
-            ct = int(grp["_comtask"].sum())
-            return ct if ct > 0 else len(grp)
+            """Universo do KPI (doc oficial): TODOS os PDVs score 5 do relatório."""
+            return len(grp)
 
         resumo, detalhe = [], []
         for setor in sorted(df["_setor"].unique()):
             grp   = df[df["_setor"] == setor]
             base  = _base(grp)
-            ok    = int(grp["_bateu"].sum())
+            ok    = int(grp["_okfinal"].sum())
             pct   = round(ok / base * 100, 1) if base > 0 else 0
             resumo.append({
                 "setor": setor, "pdvs_total": base, "pdvs_ok": ok, "pct": pct,
@@ -2652,7 +2657,7 @@ def processar_score5(conteudo_bytes, mes_ref=None):
             print(f"  Setor {setor}: {ok}/{base} ({pct}%)")
 
         base_op = _base(df)
-        ok_op   = int(df["_bateu"].sum())
+        ok_op   = int(df["_okfinal"].sum())
         pct_op  = round(ok_op / base_op * 100, 1) if base_op > 0 else 0
         resumo.append({
             "setor": "OPERACAO", "pdvs_total": base_op, "pdvs_ok": ok_op, "pct": pct_op,
