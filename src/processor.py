@@ -227,7 +227,9 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     # Isso derruba o pico de memória de ~255MB para ~35MB — essencial no Render free.
     COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
                    "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo",
-                   "Desc Tipo Movimento", "Nota Fiscal"}
+                   "Desc Tipo Movimento", "Nota Fiscal",
+                   # rastreabilidade do pedido BEES (Pesquisa Pedido)
+                   "Pedido Cliente", "Pedido", "Nome Setor", "Mapa", "Entrega Real"}
     # Candidatos para o nº do pedido (col Z) — usado p/ cruzar Faturados x Buffer.
     # O nome exato no relatório varia; pegamos o primeiro que existir.
     PEDIDO_CANDIDATOS = ["Nr. Pedido", "Num Pedido", "Nr Pedido", "Numero Pedido",
@@ -335,6 +337,45 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
         except Exception as _ev:
             print(f"  ⚠️ verdes_pedidos: {_ev}")
 
+    # ── Pedido BEES (rastreabilidade / Pesquisa Pedido) — 1 linha por Pedido Cliente ──
+    # 'Pedido Cliente' (col BG) = nº do pedido no BEES. Agrega os itens do pedido:
+    # NF, setor, PDV, data, HL (marcação × entrega), mapa, motivo e entrega real.
+    if "Pedido Cliente" in df.columns:
+        try:
+            _mot = df["Motivo"].astype(str).str.strip() if "Motivo" in df.columns else pd.Series("", index=df.index)
+            pb = pd.DataFrame({
+                "bees":         df["Pedido Cliente"].astype(str).str.strip().str.lstrip("0"),
+                "pedido":       df["Pedido"].astype(str).str.strip() if "Pedido" in df.columns else "",
+                "nf":           df["Nota Fiscal"].astype(str).str.strip().str.lstrip("0") if "Nota Fiscal" in df.columns else "",
+                "setor":        df["_setor"],
+                "nome_setor":   df["Nome Setor"].astype(str).str.strip() if "Nome Setor" in df.columns else "",
+                "cod_pdv":      df["_cod_pdv"],
+                "nome_pdv":     df["Nome Cliente"].astype(str).str.strip() if "Nome Cliente" in df.columns else "",
+                "data_pedido":  df["Data"].astype(str).str.strip(),
+                "mapa":         df["Mapa"].astype(str).str.strip() if "Mapa" in df.columns else "",
+                "entrega_real": df["Entrega Real"].astype(str).str.strip() if "Entrega Real" in df.columns else "",
+                "motivo":       _mot,
+                "hl_marcacao":  df["_volume_marcacao"],
+                "hl_entrega":   df["_volume"],
+            })
+            pb = pb[pb["bees"] != ""]
+            if not pb.empty:
+                ag = pb.groupby("bees", as_index=False).agg(
+                    pedido=("pedido", "first"), nf=("nf", "first"), setor=("setor", "first"),
+                    nome_setor=("nome_setor", "first"), cod_pdv=("cod_pdv", "first"),
+                    nome_pdv=("nome_pdv", "first"), data_pedido=("data_pedido", "first"),
+                    mapa=("mapa", "first"), entrega_real=("entrega_real", "first"),
+                    hl_marcacao=("hl_marcacao", "sum"), hl_entrega=("hl_entrega", "sum"))
+                # Motivo de devolução = 1º motivo diferente de "Pedido Normal" entre os itens.
+                nn = pb[~pb["motivo"].str.upper().isin(["PEDIDO NORMAL", ""])].groupby("bees")["motivo"].first()
+                ag["motivo"] = ag["bees"].map(nn).fillna("")
+                ag["hl_marcacao"] = ag["hl_marcacao"].round(3)
+                ag["hl_entrega"]  = ag["hl_entrega"].round(3)
+                sobrescrever_aba("pedido_bees", ag)
+                print(f"  📦 pedido_bees: {len(ag)} pedidos BEES")
+        except Exception as _eb:
+            print(f"  ⚠️ pedido_bees: {_eb}")
+
     hoje = date.today()
     mes_atual = hoje.replace(day=1)
     mes_anterior = (mes_atual - pd.DateOffset(months=1)).date()
@@ -440,7 +481,7 @@ def processar_faturados(conteudo_bytes):
     Gera 'faturados_detalhe' (snapshot — substitui a cada import)."""
     print("📂 Processando Faturados (030237)...")
     df = ler_csv_inf(conteudo_bytes,
-                     usecols=lambda c: c.strip() in {"Setor - nf", "Cliente", "Nome", "Nr. Pedido"})
+                     usecols=lambda c: c.strip() in {"Setor - nf", "Cliente", "Nome", "Nr. Pedido", "Nota", "Total", "Mapa"})
     df.columns = [c.strip() for c in df.columns]
     df["_setor"] = df["Setor - nf"].apply(normalizar_setor)
     df = df[df["_setor"].isin(SETORES_VALIDOS)]
@@ -451,6 +492,27 @@ def processar_faturados(conteudo_bytes):
     base = base[base["_num_pedido"] != ""]
     out = _montar_detalhe_pedidos(base)
     sobrescrever_aba("faturados_detalhe", out)
+
+    # ── Valor por NF (rastreabilidade de pedido) — soma Total por Nota + Mapa ──
+    if "Nota" in df.columns:
+        _nf = df["Nota"].astype(str).str.strip().str.lstrip("0")
+        _tot = pd.to_numeric(
+            df.get("Total", pd.Series("0", index=df.index)).astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+            errors="coerce").fillna(0.0)
+        fnf = pd.DataFrame({
+            "nf": _nf, "setor": df["_setor"], "cod_pdv": df["_cod_pdv"], "nome_pdv": df["_nome_pdv"],
+            "mapa": df["Mapa"].astype(str).str.strip() if "Mapa" in df.columns else "",
+            "valor": _tot, "linhas": 1,
+        })
+        fnf = fnf[fnf["nf"] != ""]
+        if not fnf.empty:
+            fnf_ag = fnf.groupby("nf", as_index=False).agg(
+                setor=("setor", "first"), cod_pdv=("cod_pdv", "first"), nome_pdv=("nome_pdv", "first"),
+                mapa=("mapa", "first"), valor=("valor", "sum"), itens=("linhas", "sum"))
+            fnf_ag["valor"] = fnf_ag["valor"].round(2)
+            sobrescrever_aba("faturado_nf", fnf_ag)
+            print(f"  🧾 faturado_nf: {len(fnf_ag)} notas (valor por NF)")
+
     n_ped = base["_num_pedido"].nunique()
     atualizar_status_arquivo("030237 (Faturados)", "✅ OK", f"{n_ped} pedidos, {len(out)} linhas")
     print(f"  ✅ Faturados: {n_ped} pedidos, {len(out)} linhas")
