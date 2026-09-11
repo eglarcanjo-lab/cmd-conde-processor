@@ -3890,7 +3890,11 @@ def processar_scanntech(conteudo_bytes, mes_ref=None):
         df["setor"]      = df["_cod_pdv"].apply(norm if df_base.empty == False else str).map(mapa_setor).fillna("").astype(str)
         df["dia_visita"] = df["_cod_pdv"].apply(norm if df_base.empty == False else str).map(mapa_visita).fillna("").astype(str)
 
-        mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data")
+        # O arquivo Scanntech é um snapshot sem coluna de mês → se a UI não mandar
+        # "Mês de referência", usa o mês atual (Brasília). Para importar um mês
+        # passado, preencha o "Mês de referência" no formulário de Arquivos.
+        mes_ref = mes_ref or _mes_ref_do_dado(df, "Mês", "Mês Referência", "Período", "Data", "mes", "data",
+                                              fallback=hoje_brasilia().strftime("%Y-%m"))
 
         # ── Detalhe ──────────────────────────────────────────────────────────
         df_det = df[["_cod_pdv","_nome","setor","_gv","dia_visita","_status","_ativo"]].copy()
@@ -3899,7 +3903,8 @@ def processar_scanntech(conteudo_bytes, mes_ref=None):
         df_det["mes_referencia"] = mes_ref
         # Remover linhas com GV vazio/nulo/nan
         df_det = df_det[df_det["gv"].astype(str).str.strip().str.lower().isin(["", "nan", "none"]) == False]
-        sobrescrever_aba("spo_scanntech_detalhe", df_det)
+        # Acumula por mês (substitui só o mês importado) — mantém os demais meses do tri.
+        sobrescrever_por_mes("spo_scanntech_detalhe", df_det, "mes_referencia")
 
         # ── Resumo por GV ─────────────────────────────────────────────────────
         # Filtrar GVs válidos (sem nan/vazio) antes de agrupar
@@ -3936,7 +3941,7 @@ def processar_scanntech(conteudo_bytes, mes_ref=None):
         print(f"  Status: {status_counts}")
 
         df_resumo = pd.DataFrame(resumo)
-        sobrescrever_aba("spo_scanntech_resumo", df_resumo)
+        sobrescrever_por_mes("spo_scanntech_resumo", df_resumo, "mes_referencia")
         atualizar_status_arquivo("SPO - Expansão Scanntech", "✅ OK",
                                  f"Operação: {ativos_op}/{total_op} PDVs ativos")
         print(f"  ✅ Scanntech: {ativos_op}/{total_op} ativos")
