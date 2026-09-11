@@ -3175,7 +3175,7 @@ def calcular_todos_spo_tasks():
         ("Tasks MATCH",         lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "match",       None,           "spo_tasks_match_resumo",      "SPO - Tasks MATCH",      60, mes_ref=_mr)),
         ("Tasks Cerveja Zero",  lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        r"\bzero\b|\bcero\b", "spo_tasks_cerv_zero_resumo", "SPO - Tasks Cerveja Zero", 60, mes_ref=_mr)),
         ("Tasks Digitalização", lambda: _calcular_tasks_com_df(df_tasks, "digitalização bees",            None,          None,           "spo_tasks_digit_resumo",      "SPO - Tasks Digitalização",60, mes_ref=_mr)),
-        ("Tasks +LN",           lambda: _calcular_tasks_ln(df_tasks, mes_ref=_mr)),
+        # +LN saiu daqui: agora vem de um arquivo dedicado (processar_ln / campo spo_ln).
     ]
 
     for nome, fn in funcoes:
@@ -3243,54 +3243,90 @@ def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_n
     print(f"    ✅ {pct_op}% operação")
 
 
-def _calcular_tasks_ln(df_tasks, mes_ref=None):
-    """+LN (KPI 27): Task de SKU/PDV de Long Neck HE (Coleção +LN — Corona/Corona Cero/
-    Stella/Stella Pure Gold/Spaten/Michelob). Número absoluto de tasks VALID, acumulado
-    no tri. Identifica a task pela descrição (+LN / Long Neck). Gera spo_tasks_ln_resumo."""
+_MES_PT_REV = {"jan":1,"fev":2,"mar":3,"abr":4,"mai":5,"jun":6,"jul":7,"ago":8,"set":9,"out":10,"nov":11,"dez":12}
+def _mes_pt_para_ym(serie):
+    """Converte 'Set/2026' / 'Set/26' → '2026-09' (pega o 1º valor válido da série)."""
+    for v in serie.dropna().astype(str):
+        s = v.strip().lower().replace(" ", "")
+        if "/" not in s: continue
+        a, b = s.split("/")[:2]
+        m = _MES_PT_REV.get(a[:3]); y = b.strip()
+        if m and y.isdigit():
+            if len(y) == 2: y = "20" + y
+            return f"{y}-{m:02d}"
+    return None
+
+
+def processar_ln(conteudo_bytes, mes_ref=None):
+    """+LN (KPI 27) — base DEDICADA (relatório +LN do BI, aba Export). Cada linha = 1 PDV
+    com Meta/Real de SKUs distintos de Long Neck HE e a coluna 'Bateu' (1=OK / 0=NOK).
+    Realizado = nº de PDVs que bateram. Detalhe traz Gap e o status por produto
+    (STE, STE PG, COR, CORZ, SPT, MIC). Acumula por mês. Gera spo_tasks_ln_resumo/detalhe."""
+    import io as _io
+    print("📂 Processando +LN (SPO Item 27) — base dedicada...")
     SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
     META = 60
-    LN_IDS = {"01_06_05"}  # id da task "Auxilie o PDV a comprar X SKUs de Coleção +LN de Long Necks HE"
+    try:
+        try: df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
+        except Exception: df = pd.read_excel(_io.BytesIO(conteudo_bytes), dtype=str)
+        df.columns = [c.strip() for c in df.columns]
 
-    ids = df_tasks["id_task"].astype(str).str.strip()
-    df = df_tasks[ids.isin(LN_IDS)].copy()
-    if df.empty:  # fallback: identifica pela descrição (+LN) caso o id mude
-        desc = df_tasks["descricao"].astype(str)
-        df = df_tasks[desc.str.contains(r"\+\s*ln\b", case=False, regex=True, na=False)].copy()
-    print(f"  [SPO - Tasks +LN] {len(df)} tasks (SKU/PDV Long Neck HE · id {'/'.join(LN_IDS)})")
-    if df.empty:
-        amostra = desc.str.strip()
-        amostra = amostra[amostra.str.contains(r"neck|\bln\b", case=False, na=False, regex=True)].unique()[:8].tolist()
-        print(f"  [SPO - Tasks +LN] ⚠️ 0 tasks — descrições com 'neck/ln': {amostra}")
-        return
+        mes_ref = mes_ref or _mes_pt_para_ym(df.get("Mes/Ano", pd.Series(dtype=str))) or hoje_brasilia().strftime("%Y-%m")
 
-    df["_setor"]  = df["setor"].astype(str).str.strip()
-    df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
-    mes_ref = mes_ref or _mes_ref_do_dado(df, "mes_ano", "data_visita")
+        df["setor"] = df["RN"].astype(str).str.strip()
+        df = df[df["setor"].isin(SETORES_LOCAL)].copy()
+        if df.empty:
+            print("  ⚠️ +LN: nenhuma linha nos setores locais"); return
+        df["_bateu"] = pd.to_numeric(df["Bateu"], errors="coerce").fillna(0) >= 1
+        # cod_pdv = parte após o "_" em 'Unb Pdv' (1035185_20017 → 20017)
+        df["_cod"] = df["Unb Pdv"].astype(str).str.strip().apply(lambda s: s.split("_")[-1] if "_" in s else s)
 
-    resumo = []
-    df_s = df[df["_setor"].isin(SETORES_LOCAL)]
-    for setor in sorted(df_s["_setor"].unique()):
-        grp = df_s[df_s["_setor"] == setor]
-        total = len(grp); validas = int(grp["_valida"].sum())
-        pct = round(validas / total * 100, 1) if total > 0 else 0
-        resumo.append({"setor": setor, "tasks_total": total, "tasks_validas": validas,
-                       "pct": pct, "ok": "OK" if pct >= META else "NOK", "mes_referencia": mes_ref})
-    total_op = len(df_s); validas_op = int(df_s["_valida"].sum())
-    pct_op = round(validas_op / total_op * 100, 1) if total_op > 0 else 0
-    resumo.append({"setor": "OPERACAO", "tasks_total": total_op, "tasks_validas": validas_op,
-                   "pct": pct_op, "ok": "OK" if pct_op >= META else "NOK", "mes_referencia": mes_ref})
-    sobrescrever_aba("spo_tasks_ln_resumo", pd.DataFrame(resumo))
+        # dia_visita via pdv_base
+        df_base = ler_aba("pdv_base"); mapa_visita = {}
+        if not df_base.empty and "dia_visita" in df_base.columns:
+            def _n(v):
+                s = str(v).strip()
+                return s[:-2] if s.endswith(".0") else s
+            df_base["_cod"] = df_base["cod_pdv"].apply(_n)
+            mapa_visita = df_base.set_index("_cod")["dia_visita"].to_dict()
+        df["dia_visita"] = df["_cod"].map(mapa_visita).fillna("").astype(str)
 
-    # Detalhe: tasks em aberto por PDV (OPEN/INVALID)
-    df_det = df_s.copy()
-    df_det["status_task"] = df_det["status"].astype(str).str.strip()
-    df_ab = df_det[~df_det["_valida"]][["_setor","cod_pdv","nome_pdv","dia_visita","status_task"]].drop_duplicates(subset=["cod_pdv"])
-    df_ab.columns = ["setor","cod_pdv","nome_pdv","dia_visita","status_task"]
-    df_ab["mes_referencia"] = mes_ref
-    sobrescrever_aba("spo_tasks_ln_detalhe", df_ab)
+        # ── Resumo por setor + OPERAÇÃO (realizado = PDVs que bateram) ──
+        resumo = []
+        for setor in sorted(df["setor"].unique()):
+            grp = df[df["setor"] == setor]
+            total = len(grp); validas = int(grp["_bateu"].sum())
+            pct = round(validas / total * 100, 1) if total > 0 else 0
+            resumo.append({"setor": setor, "tasks_total": total, "tasks_validas": validas,
+                           "pct": pct, "ok": "OK" if pct >= META else "NOK", "mes_referencia": mes_ref})
+        total_op = len(df); validas_op = int(df["_bateu"].sum())
+        pct_op = round(validas_op / total_op * 100, 1) if total_op > 0 else 0
+        resumo.append({"setor": "OPERACAO", "tasks_total": total_op, "tasks_validas": validas_op,
+                       "pct": pct_op, "ok": "OK" if pct_op >= META else "NOK", "mes_referencia": mes_ref})
+        sobrescrever_por_mes("spo_tasks_ln_resumo", pd.DataFrame(resumo), "mes_referencia")
 
-    atualizar_status_arquivo("SPO - Tasks +LN", "✅ OK", f"Operação: {pct_op}% ({validas_op}/{total_op} tasks)")
-    print(f"  ✅ Tasks +LN: {pct_op}% operação ({validas_op}/{total_op} tasks)")
+        # ── Detalhe por PDV com Gap + flag por produto LN ──
+        prod = {"STE": "ste", "STE PG": "ste_pg", "COR": "cor", "CORZ": "corz", "SPT": "spt", "MIC": "mic"}
+        det = pd.DataFrame({
+            "setor": df["setor"], "cod_pdv": df["_cod"],
+            "nome_pdv": df["Nome PDV"].astype(str).str.strip(),
+            "dia_visita": df["dia_visita"],
+            "meta": df["Meta"].astype(str).str.strip(),
+            "real": df["Real"].astype(str).str.strip(),
+            "bateu": df["_bateu"].map({True: "OK", False: "NOK"}),
+            "gap": df["Gaps SKUs"].astype(str).str.strip() if "Gaps SKUs" in df.columns else "",
+        })
+        for src, dst in prod.items():
+            det[dst] = df[src].astype(str).str.strip() if src in df.columns else ""
+        det["mes_referencia"] = mes_ref
+        det = det.sort_values(["setor", "bateu"])
+        sobrescrever_por_mes("spo_tasks_ln_detalhe", det, "mes_referencia")
+
+        atualizar_status_arquivo("SPO - +LN", "✅ OK", f"Operação: {validas_op}/{total_op} PDVs bateram ({pct_op}%)")
+        print(f"  ✅ +LN ({mes_ref}): {validas_op}/{total_op} PDVs bateram ({pct_op}%)")
+    except Exception as e:
+        print(f"  ❌ Erro +LN: {e}")
+        atualizar_status_arquivo("SPO - +LN", "❌ ERRO", str(e)[:200])
 
 
 def _calcular_politica_com_df(df_tasks, mes_ref=None):
