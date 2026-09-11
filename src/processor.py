@@ -3639,8 +3639,9 @@ def processar_cupons_digitais(conteudo_bytes, mes_ref=None):
 
         df.columns = [c.strip() for c in df.columns]
 
-        # Mês vigente no formato do arquivo: Mai/2026
-        hoje = date.today()
+        # Mês vigente no formato do arquivo: Mai/2026 (horário de Brasília — evita
+        # apontar o mês seguinte perto da virada, quando o UTC já passou da meia-noite)
+        hoje = hoje_brasilia()
         mes_vigente = f"{MESES_PT[hoje.month]}/{hoje.year}"
         mes_ref = hoje.strftime("%Y-%m")
         print(f"  Mês vigente: {mes_vigente}")
@@ -3650,7 +3651,8 @@ def processar_cupons_digitais(conteudo_bytes, mes_ref=None):
         df["gv"]    = df["GV"].astype(str).str.strip()
         df = df[df["setor"].isin(SETORES_LOCAL)].copy()
         df["_cupons"]   = pd.to_numeric(df["Cupons"], errors="coerce").fillna(0)
-        df["_bloqueio"] = df["Bloqueio"].astype(str).str.strip() == "Não"
+        # Bloqueio = "Não" tolerante a acento/maiúsculas/espaços (Não/NAO/nao…)
+        df["_bloqueio"] = df["Bloqueio"].astype(str).str.strip().str.upper().isin(["NÃO", "NAO"])
         df["_mes"]      = df["Mês"].astype(str).str.strip()
 
         # Cruzar com pdv_base para dia_visita
