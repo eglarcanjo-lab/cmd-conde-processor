@@ -4115,7 +4115,9 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
             })
 
         df_detalhe = pd.DataFrame(df_det)
-        sobrescrever_aba("spo_ap_detalhe", df_detalhe)
+        # Acumula por mês (substitui só o mês do arquivo) — mantém os meses do tri
+        # disponíveis para o seletor de mês na tela do KPI 18.
+        sobrescrever_por_mes("spo_ap_detalhe", df_detalhe, "mes_referencia")
 
         # ── rv_ap — popula aba usada pelo cálculo de RV ───────────────────────
         rv_ap_rows = []
@@ -4173,7 +4175,7 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
         })
 
         df_resumo = pd.DataFrame(resumo)
-        sobrescrever_aba("spo_ap_resumo", df_resumo)
+        sobrescrever_por_mes("spo_ap_resumo", df_resumo, "mes_referencia")
         atualizar_status_arquivo("SPO - Atendimento Produtivo", "✅ OK",
                                  f"Operação: {pct_op}% ({ap_ok_op}/{total_op} RNs)")
         print(f"  ✅ AP: {pct_op}% ({ap_ok_op}/{total_op} RNs com AP OK)")
