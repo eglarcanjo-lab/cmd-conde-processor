@@ -3249,13 +3249,14 @@ def _calcular_tasks_ln(df_tasks, mes_ref=None):
     no tri. Identifica a task pela descrição (+LN / Long Neck). Gera spo_tasks_ln_resumo."""
     SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
     META = 60
+    LN_IDS = {"01_06_05"}  # id da task "Auxilie o PDV a comprar X SKUs de Coleção +LN de Long Necks HE"
 
-    desc = df_tasks["descricao"].astype(str)
-    mask = desc.str.contains(r"\+\s*ln\b", case=False, regex=True, na=False)
-    if not mask.any():  # fallback: "long neck" + "sku" na descrição
-        mask = desc.str.contains(r"long\s*neck", case=False, na=False) & desc.str.contains(r"sku", case=False, na=False)
-    df = df_tasks[mask].copy()
-    print(f"  [SPO - Tasks +LN] {len(df)} tasks (SKU/PDV Long Neck HE)")
+    ids = df_tasks["id_task"].astype(str).str.strip()
+    df = df_tasks[ids.isin(LN_IDS)].copy()
+    if df.empty:  # fallback: identifica pela descrição (+LN) caso o id mude
+        desc = df_tasks["descricao"].astype(str)
+        df = df_tasks[desc.str.contains(r"\+\s*ln\b", case=False, regex=True, na=False)].copy()
+    print(f"  [SPO - Tasks +LN] {len(df)} tasks (SKU/PDV Long Neck HE · id {'/'.join(LN_IDS)})")
     if df.empty:
         amostra = desc.str.strip()
         amostra = amostra[amostra.str.contains(r"neck|\bln\b", case=False, na=False, regex=True)].unique()[:8].tolist()
