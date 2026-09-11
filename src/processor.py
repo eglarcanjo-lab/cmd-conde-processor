@@ -3175,6 +3175,7 @@ def calcular_todos_spo_tasks():
         ("Tasks MATCH",         lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "match",       None,           "spo_tasks_match_resumo",      "SPO - Tasks MATCH",      60, mes_ref=_mr)),
         ("Tasks Cerveja Zero",  lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        r"\bzero\b|\bcero\b", "spo_tasks_cerv_zero_resumo", "SPO - Tasks Cerveja Zero", 60, mes_ref=_mr)),
         ("Tasks Digitalização", lambda: _calcular_tasks_com_df(df_tasks, "digitalização bees",            None,          None,           "spo_tasks_digit_resumo",      "SPO - Tasks Digitalização",60, mes_ref=_mr)),
+        ("Tasks +LN",           lambda: _calcular_tasks_ln(df_tasks, mes_ref=_mr)),
     ]
 
     for nome, fn in funcoes:
@@ -3240,6 +3241,55 @@ def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_n
     sobrescrever_aba(aba, pd.DataFrame(resumo))
     atualizar_status_arquivo(status_nome, "✅ OK", f"Operação: {pct_op}% ({validas_op}/{total_op} tasks)")
     print(f"    ✅ {pct_op}% operação")
+
+
+def _calcular_tasks_ln(df_tasks, mes_ref=None):
+    """+LN (KPI 27): Task de SKU/PDV de Long Neck HE (Coleção +LN — Corona/Corona Cero/
+    Stella/Stella Pure Gold/Spaten/Michelob). Número absoluto de tasks VALID, acumulado
+    no tri. Identifica a task pela descrição (+LN / Long Neck). Gera spo_tasks_ln_resumo."""
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    META = 60
+
+    desc = df_tasks["descricao"].astype(str)
+    mask = desc.str.contains(r"\+\s*ln\b", case=False, regex=True, na=False)
+    if not mask.any():  # fallback: "long neck" + "sku" na descrição
+        mask = desc.str.contains(r"long\s*neck", case=False, na=False) & desc.str.contains(r"sku", case=False, na=False)
+    df = df_tasks[mask].copy()
+    print(f"  [SPO - Tasks +LN] {len(df)} tasks (SKU/PDV Long Neck HE)")
+    if df.empty:
+        amostra = desc.str.strip()
+        amostra = amostra[amostra.str.contains(r"neck|\bln\b", case=False, na=False, regex=True)].unique()[:8].tolist()
+        print(f"  [SPO - Tasks +LN] ⚠️ 0 tasks — descrições com 'neck/ln': {amostra}")
+        return
+
+    df["_setor"]  = df["setor"].astype(str).str.strip()
+    df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
+    mes_ref = mes_ref or _mes_ref_do_dado(df, "mes_ano", "data_visita")
+
+    resumo = []
+    df_s = df[df["_setor"].isin(SETORES_LOCAL)]
+    for setor in sorted(df_s["_setor"].unique()):
+        grp = df_s[df_s["_setor"] == setor]
+        total = len(grp); validas = int(grp["_valida"].sum())
+        pct = round(validas / total * 100, 1) if total > 0 else 0
+        resumo.append({"setor": setor, "tasks_total": total, "tasks_validas": validas,
+                       "pct": pct, "ok": "OK" if pct >= META else "NOK", "mes_referencia": mes_ref})
+    total_op = len(df_s); validas_op = int(df_s["_valida"].sum())
+    pct_op = round(validas_op / total_op * 100, 1) if total_op > 0 else 0
+    resumo.append({"setor": "OPERACAO", "tasks_total": total_op, "tasks_validas": validas_op,
+                   "pct": pct_op, "ok": "OK" if pct_op >= META else "NOK", "mes_referencia": mes_ref})
+    sobrescrever_aba("spo_tasks_ln_resumo", pd.DataFrame(resumo))
+
+    # Detalhe: tasks em aberto por PDV (OPEN/INVALID)
+    df_det = df_s.copy()
+    df_det["status_task"] = df_det["status"].astype(str).str.strip()
+    df_ab = df_det[~df_det["_valida"]][["_setor","cod_pdv","nome_pdv","dia_visita","status_task"]].drop_duplicates(subset=["cod_pdv"])
+    df_ab.columns = ["setor","cod_pdv","nome_pdv","dia_visita","status_task"]
+    df_ab["mes_referencia"] = mes_ref
+    sobrescrever_aba("spo_tasks_ln_detalhe", df_ab)
+
+    atualizar_status_arquivo("SPO - Tasks +LN", "✅ OK", f"Operação: {pct_op}% ({validas_op}/{total_op} tasks)")
+    print(f"  ✅ Tasks +LN: {pct_op}% operação ({validas_op}/{total_op} tasks)")
 
 
 def _calcular_politica_com_df(df_tasks, mes_ref=None):
