@@ -4048,7 +4048,7 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
       KPIs OK   = quantos dos 4 pilares o RN bateu (0-4)
       AP OK     = Sim/Não — RN com Atendimento Produtivo
       Layout ATUAL do BI (mudou — 3 formatos diferentes por KPI):
-        Positivação (Tasks): Meta='52.6%' · Visitas Positivadas='56.6%' (=real) · GAP  [% em texto]
+        Positivação (Tasks): Meta='53' · Visitas Positivadas='57' (=real) · GAP  [número absoluto]
         Carteira (Compradores): Meta.1='100' · Real='134' · GAP.1                       [contagem]
         GPS: Meta.2='0.882' · Real.1='1.244' · GAP.2                                     [fração 0-1]
         Rota Efetiva: Meta.3='0.8' · Real.2='0.995' · GAP.3                              [fração 0-1]
@@ -4095,10 +4095,10 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
                 "segmento":        str(row.get("Segmento","")).strip(),
                 "ap_ok":           str(row.get("AP OK","")).strip(),
                 "kpis_ok":         str(row.get("KPIs OK","")).strip(),
-                # Positivação Tasks Compra (Meta / Visitas Positivadas / GAP — % em texto)
-                "positiv_meta":    _pstr(row.get("Meta","")),
-                "positiv_real":    _pstr(row.get("Visitas Positivadas","")),
-                "positiv_gap":     _pstr(row.get("GAP","")),
+                # Positivação Tasks Compra (Meta / Visitas Positivadas / GAP — número absoluto)
+                "positiv_meta":    _inteiro(row.get("Meta","")),
+                "positiv_real":    _inteiro(row.get("Visitas Positivadas","")),
+                "positiv_gap":     _inteiro(row.get("GAP","")),
                 # Carteira Ideal / Compradores (Meta.1 / Real / GAP.1 — contagem)
                 "carteira_meta":   _inteiro(row.get("Meta.1","")),
                 "carteira_real":   _inteiro(row.get("Real","")),
@@ -4126,8 +4126,8 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
             rv_ap_rows.append({
                 "setor":               row["setor"],
                 "mes_referencia":      mes_ref,
-                "tasks_compra_real":   _pstr(row.get("Visitas Positivadas", "")),
-                "tasks_compra_meta":   _pstr(row.get("Meta", "")),
+                "tasks_compra_real":   _inteiro(row.get("Visitas Positivadas", "")),
+                "tasks_compra_meta":   _inteiro(row.get("Meta", "")),
                 "compradores_real":    _inteiro(row.get("Real", "")),
                 "compradores_meta":    _inteiro(row.get("Meta.1", "")),
                 "rota_efetiva_real":   _pfrac(row.get("Real.2", "")),
