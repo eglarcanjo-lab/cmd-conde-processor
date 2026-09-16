@@ -331,7 +331,9 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
                     "volume_hl":    dv["_volume"].round(3).values,
                     "mes_referencia": _dt.dt.strftime("%Y-%m").values,
                 })
-                det_v = det_v[det_v["mes_referencia"].notna() & (det_v["mes_referencia"] != "")]
+                # Só VENDA efetiva (volume > 0) — bate com a cobertura do painel; exclui
+                # linhas zeradas/devolução que inflavam a contagem de PDVs no export.
+                det_v = det_v[det_v["mes_referencia"].notna() & (det_v["mes_referencia"] != "") & (det_v["volume_hl"] > 0)]
                 sobrescrever_por_mes("verdes_pedidos", det_v, "mes_referencia")
                 print(f"  🌿 verdes_pedidos (SKU {_SKU_V}): {len(det_v)} linhas")
         except Exception as _ev:
