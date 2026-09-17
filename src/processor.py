@@ -644,6 +644,75 @@ def processar_cora(conteudo_bytes):
     return det_buf
 
 
+def processar_coleta(conteudo_bytes):
+    """Planilha de coleta (xlsx). Gera dois snapshots:
+      • shelf            — guia 'FAROL PZC' (produtos perto do vencimento p/ a aba Shelf).
+      • deck_vencimento  — guia 'BASE' (menor validade por código = 1º Vencimento do Deck)."""
+    print("📂 Processando Coleta (Shelf + Vencimento)...")
+    buf = io.BytesIO(conteudo_bytes)
+    xls = pd.ExcelFile(buf, engine="openpyxl")
+
+    def achar_aba(alvo):
+        for s in xls.sheet_names:
+            if _norm_cabecalho(s) == _norm_cabecalho(alvo):
+                return s
+        return None
+
+    # ── FAROL PZC → shelf ────────────────────────────────────────────────────
+    aba_pzc = achar_aba("FAROL PZC")
+    n_shelf = 0
+    if aba_pzc:
+        # Cabeçalho na 5ª linha (CODIGO | DESCRICAO | QTD CX | VALIDADE | DIAS PRA VENCER | VALOR SHELF)
+        dfp = pd.read_excel(buf, engine="openpyxl", sheet_name=aba_pzc, skiprows=4, dtype=str)
+        dfp.columns = [_norm_cabecalho(c) for c in dfp.columns]
+        col = {c: c for c in dfp.columns}
+        gc_ = lambda *names: next((col[_norm_cabecalho(n)] for n in names if _norm_cabecalho(n) in col), None)
+        c_cod, c_desc = gc_("codigo"), gc_("descricao")
+        c_qtd, c_val = gc_("qtd cx"), gc_("validade")
+        c_dias, c_valor = gc_("dias pra vencer"), gc_("valor shelf")
+        if c_cod:
+            dfp = dfp[dfp[c_cod].notna() & (dfp[c_cod].astype(str).str.strip() != "")]
+            val = pd.to_datetime(dfp[c_val], errors="coerce") if c_val else pd.Series([pd.NaT] * len(dfp))
+            shelf = pd.DataFrame({
+                "cod_produto": dfp[c_cod].astype(str).str.strip().str.lstrip("0"),
+                "descricao": (dfp[c_desc].astype(str).str.strip() if c_desc else ""),
+                "qtd_cx": (pd.to_numeric(dfp[c_qtd], errors="coerce").fillna(0).round(0).astype(int) if c_qtd else 0),
+                "validade": val.dt.strftime("%d/%m/%Y").fillna(""),
+                "dias_vencer": (pd.to_numeric(dfp[c_dias], errors="coerce").fillna(0).round(0).astype(int) if c_dias else 0),
+                "valor_shelf": (pd.to_numeric(dfp[c_valor], errors="coerce").fillna(0).round(2) if c_valor else 0.0),
+            })
+            shelf = shelf[shelf["cod_produto"] != ""].sort_values("dias_vencer")
+            sobrescrever_aba("shelf", shelf)
+            n_shelf = len(shelf)
+    print(f"  ✅ shelf: {n_shelf} itens")
+
+    # ── BASE → deck_vencimento (menor validade por código) ───────────────────
+    aba_base = achar_aba("BASE")
+    n_venc = 0
+    if aba_base:
+        dfb = pd.read_excel(buf, engine="openpyxl", sheet_name=aba_base, dtype=str)
+        dfb.columns = [_norm_cabecalho(c) for c in dfb.columns]
+        cb = lambda *names: next((c for c in dfb.columns if c in {_norm_cabecalho(n) for n in names}), None)
+        c_cod, c_val = cb("cod"), cb("validade")
+        if c_cod and c_val:
+            dfb = dfb[dfb[c_cod].notna() & (dfb[c_cod].astype(str).str.strip() != "")].copy()
+            dfb["_cod"] = dfb[c_cod].astype(str).str.strip().str.lstrip("0")
+            dfb["_val"] = pd.to_datetime(dfb[c_val], errors="coerce")
+            dfb = dfb[dfb["_val"].notna()]
+            venc = dfb.groupby("_cod", as_index=False)["_val"].min()
+            deck_v = pd.DataFrame({
+                "cod_produto": venc["_cod"],
+                "validade": venc["_val"].dt.strftime("%d/%m/%Y"),
+            })
+            sobrescrever_aba("deck_vencimento", deck_v)
+            n_venc = len(deck_v)
+    print(f"  ✅ deck_vencimento: {n_venc} produtos")
+
+    atualizar_status_arquivo("Coleta (Shelf/Vencimento)", "✅ OK",
+                             f"shelf {n_shelf} · vencimento {n_venc}")
+    return {"shelf": n_shelf, "vencimento": n_venc}
+
+
 def processar_pedidos_historico(conteudo_bytes):
     """Import HISTÓRICO de pedidos (meses antigos, ex.: 2025). Popula SÓ as tabelas que
     ACUMULAM por mês — vendas_cliente_produto, vd_pdv, vd_produto, rv_volume — e NÃO toca
