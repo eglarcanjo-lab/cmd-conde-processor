@@ -395,7 +395,7 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
 
     # ── Cobertura ─────────────────────────────────────────────────────────────
     if _tem_mes_atual:
-        _processar_cobertura(df_mes_atual, df_mes_ant, df_clientes_base)
+        _processar_cobertura(df, df_clientes_base, hoje)
     else:
         print("  ⏭️ Cobertura: arquivo sem linhas do mês corrente — snapshot mantido")
     del df_mes_ant
@@ -762,52 +762,66 @@ def _processar_nota_itens(df):
     print(f"  🧾 nota_itens: {g['nota'].nunique()} notas · {len(g)} itens")
 
 
-def _processar_cobertura(df_atual, df_ant, df_clientes):
-    """Gera cobertura OK/Pendente/NOK por PDV x Categoria."""
-    # Inclui TODAS as categorias, inclusive as 3 Trimarca HE (Original/Stella/Spaten),
-    # para a cobertura mostrar OK/NOK delas (antes ficavam "—" por serem excluídas).
+def _processar_cobertura(df, df_clientes, hoje):
+    """Gera cobertura por PDV x Categoria com status baseado no TRIMESTRE civil:
+      OK  = comprou no mês ATUAL (coberto).
+      EST = comprou em TODOS os meses anteriores do tri, mas não no atual (escorregando).
+      IST = comprou em ALGUM mês anterior do tri (mas não todos) e não no atual.
+      NOK = não comprou em NENHUM mês do tri (não comprador no trimestre).
+    Requer o `df` com os meses do tri (o arquivo de pedidos costuma trazer ~4 meses)."""
     cats = list(CATEGORIAS_VALIDAS)
+    _codn = lambda x: (str(x).strip().lstrip("0") or "0")
 
-    # PDVs que compraram no mês atual (por categoria) — expande múltiplas categorias
-    ok_set = set()
-    for _, row in df_atual[df_atual["_volume"] > 0].iterrows():
+    # Trimestre civil (jan-mar, abr-jun, …) até o mês atual.
+    tri_ini = ((hoje.month - 1) // 3) * 3 + 1
+    meses_tri = [date(hoje.year, tri_ini + k, 1) for k in range(3) if tri_ini + k <= hoje.month]
+    mes_atual_d = date(hoje.year, hoje.month, 1)
+    prior = [m for m in meses_tri if m != mes_atual_d]
+    n_prior = len(prior)
+    tri_periods = set(pd.Period(m, freq="M") for m in meses_tri)
+
+    # bought[(cod_pdv, cat)] = set de meses (1º dia) comprados no tri (volume > 0).
+    _per = df["_data"].dt.to_period("M")
+    dft = df[_per.isin(tri_periods) & (df["_volume"] > 0)].copy()
+    dft["_m1"] = dft["_data"].dt.to_period("M").dt.to_timestamp().dt.date
+    from collections import defaultdict
+    bought = defaultdict(set)
+    for _, row in dft.iterrows():
+        cod = _codn(row["_cod_pdv"])
         for cat in (row.get("_categorias") or []):
-            ok_set.add((row["_cod_pdv"], cat))
+            bought[(cod, cat)].add(row["_m1"])
 
-    # PDVs que compraram no mês anterior (por categoria)
-    pend_set = set()
-    for _, row in df_ant[df_ant["_volume"] > 0].iterrows():
-        for cat in (row.get("_categorias") or []):
-            pend_set.add((row["_cod_pdv"], cat))
-
-    # Base de PDVs vem da base de clientes
+    # Base de PDVs vem da base de clientes (fallback: os PDVs do tri).
     if df_clientes is not None and not df_clientes.empty:
         pdvs = df_clientes[["cod_pdv", "nome_fantasia", "setor"]].drop_duplicates()
     else:
-        todos_pdvs = pd.concat([df_atual, df_ant])[["_cod_pdv", "_setor", "Nome Cliente"]].drop_duplicates(subset=["_cod_pdv"])
-        pdvs = todos_pdvs.rename(columns={"_cod_pdv": "cod_pdv", "_setor": "setor", "Nome Cliente": "nome_fantasia"})
+        pdvs = dft[["_cod_pdv", "_setor", "Nome Cliente"]].drop_duplicates(subset=["_cod_pdv"]) \
+                  .rename(columns={"_cod_pdv": "cod_pdv", "_setor": "setor", "Nome Cliente": "nome_fantasia"})
+
+    def status_de(cod, cat):
+        bm = bought.get((cod, cat), ())
+        if mes_atual_d in bm:
+            return "OK"
+        np_ = sum(1 for m in prior if m in bm)
+        if np_ == 0:
+            return "NOK"
+        if n_prior > 0 and np_ == n_prior:
+            return "EST"
+        return "IST"
 
     linhas = []
     for _, pdv in pdvs.iterrows():
-        # Normaliza cod_pdv: remove zeros e espaços, converte para string limpa
-        cod = str(pdv["cod_pdv"]).strip().lstrip("0") or "0"
+        cod = _codn(pdv["cod_pdv"])
         setor = str(pdv.get("setor", pdv.get("_setor", ""))).strip()
         nome = str(pdv.get("nome_fantasia", "")).strip()
         for cat in cats:
-            if (cod, cat) in ok_set:
-                status = "OK"
-            elif (cod, cat) in pend_set:
-                status = "PENDENTE"
-            else:
-                status = "NOK"
-
             linhas.append({
                 "setor": setor,
                 "cod_pdv": cod,
                 "nome_fantasia": nome,
                 "categoria": cat,
-                "status": status,
-                "mes_referencia": date.today().strftime("%Y-%m"),
+                "status": status_de(cod, cat),
+                "mes_referencia": mes_atual_d.strftime("%Y-%m"),
             })
 
     df_cob = pd.DataFrame(linhas)
