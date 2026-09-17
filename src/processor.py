@@ -545,6 +545,105 @@ def processar_buffer(conteudo_bytes):
     return out
 
 
+# ── Consulta-pedidos do CORA — fonte única do Buffer (novo) e do Deck (D+7) ──────
+def _norm_cabecalho(c):
+    """Normaliza um cabeçalho pra casar sem acento/ponto/caixa. 'Cód. produto'→'cod produto'."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(c)).encode("ascii", "ignore").decode("ascii")
+    return " ".join(s.replace(".", " ").lower().split())
+
+
+# nome-normalizado do CORA → nome interno
+_CORA_COLS = {
+    "numero pedido": "num_pedido",
+    "data entrega": "data_entrega",
+    "cod cliente": "cod_pdv",
+    "nome cliente": "nome_pdv",
+    "tipo pedido": "tipo_pedido",
+    "situacao pedido": "situacao",
+    "tipo buffer": "tipo_buffer",
+    "cod setor": "cod_setor",
+    "desc setor": "desc_setor",
+    "cod produto": "cod_produto",
+    "desc produto": "nome_produto",
+    "quant venda": "quant_venda",
+    "volume hectolitro": "volume_hl",
+}
+
+
+def processar_cora(conteudo_bytes):
+    """Consulta-pedidos exportada do CORA (~19 colunas). Fonte ÚNICA do Buffer e insumo
+    do Deck (Agendados D+7). Gera dois snapshots (substituem a cada import):
+      • buffer_detalhe  — linhas 'Tipo buffer' ≠ vazio, por pedido × tipo (HL).
+      • deck_agendados  — Agendados D+7 por produto (caixas): ENTREGA + REGISTRADO
+                          com Data entrega entre hoje+2 e hoje+7.
+    Faturados segue vindo do Promax (030237) por ora."""
+    from datetime import timedelta
+    print("📂 Processando CORA (consulta-pedidos)...")
+
+    # Lê só as colunas conhecidas (casando por cabeçalho normalizado, sem acento/ponto).
+    usecols = lambda c: _norm_cabecalho(c) in _CORA_COLS
+    df = ler_csv_inf(conteudo_bytes, usecols=usecols)
+    df.columns = [_CORA_COLS.get(_norm_cabecalho(c), _norm_cabecalho(c)) for c in df.columns]
+
+    for col in _CORA_COLS.values():
+        if col not in df.columns:
+            df[col] = ""
+
+    df["_setor"] = df["cod_setor"].apply(normalizar_setor)
+    df["_cod_pdv"] = df["cod_pdv"].astype(str).str.strip().str.lstrip("0")
+    df["_nome_pdv"] = df["nome_pdv"].astype(str).str.strip()
+    df["_num_pedido"] = df["num_pedido"].astype(str).str.strip().str.lstrip("0")
+    df["_tipo_buffer"] = df["tipo_buffer"].astype(str).str.strip()
+    df["_tipo_pedido"] = df["tipo_pedido"].astype(str).str.strip().str.upper()
+    df["_situacao"] = df["situacao"].astype(str).str.strip().str.upper()
+    df["_hl"] = pd.to_numeric(
+        df["volume_hl"].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+        errors="coerce").fillna(0.0)
+    df["_cx"] = pd.to_numeric(
+        df["quant_venda"].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+        errors="coerce").fillna(0.0)
+    df["_cod_produto"] = df["cod_produto"].astype(str).str.strip().str.lstrip("0")
+    df["_data_entrega"] = pd.to_datetime(df["data_entrega"].astype(str).str.strip(),
+                                         format="%d/%m/%Y", errors="coerce")
+
+    # ── 1) BUFFER — 'Tipo buffer' ≠ vazio (Reprogramado/Preservado), setor válido ──
+    buf = df[(df["_tipo_buffer"] != "") & (df["_setor"].isin(SETORES_VALIDOS)) & (df["_num_pedido"] != "")].copy()
+    if buf.empty:
+        det_buf = pd.DataFrame(columns=["setor", "cod_pdv", "nome_pdv", "num_pedido", "tipo_operacao", "volume_marcacao"])
+    else:
+        det_buf = (buf.groupby(["_num_pedido", "_tipo_buffer"], as_index=False)
+                      .agg(setor=("_setor", "first"), cod_pdv=("_cod_pdv", "first"),
+                           nome_pdv=("_nome_pdv", "first"), volume_marcacao=("_hl", "sum")))
+        det_buf = det_buf.rename(columns={"_num_pedido": "num_pedido", "_tipo_buffer": "tipo_operacao"})
+        det_buf["volume_marcacao"] = det_buf["volume_marcacao"].round(3)
+        det_buf = det_buf[["setor", "cod_pdv", "nome_pdv", "num_pedido", "tipo_operacao", "volume_marcacao"]]
+    sobrescrever_aba("buffer_detalhe", det_buf)
+    print(f"  ✅ buffer_detalhe (CORA): {det_buf['num_pedido'].nunique()} pedidos · {len(det_buf)} linhas")
+
+    # ── 2) DECK — Agendados D+7 por produto (caixas) ──────────────────────────────
+    hoje = hoje_brasilia()
+    d_ini = pd.Timestamp(hoje + timedelta(days=2))   # depois de amanhã (amanhã = entrega normal)
+    d_fim = pd.Timestamp(hoje + timedelta(days=7))
+    ag = df[(df["_tipo_pedido"] == "ENTREGA") & (df["_situacao"] == "REGISTRADO") &
+            (df["_data_entrega"] >= d_ini) & (df["_data_entrega"] <= d_fim) &
+            (df["_cod_produto"] != "")].copy()
+    if ag.empty:
+        deck = pd.DataFrame(columns=["cod_produto", "nome_produto", "caixas"])
+    else:
+        deck = (ag.groupby("_cod_produto", as_index=False)
+                  .agg(nome_produto=("nome_produto", "first"), caixas=("_cx", "sum")))
+        deck = deck.rename(columns={"_cod_produto": "cod_produto"})
+        deck["caixas"] = deck["caixas"].round(0).astype(int)
+        deck = deck.sort_values("caixas", ascending=False)
+    sobrescrever_aba("deck_agendados", deck)
+    print(f"  ✅ deck_agendados (D+7 {d_ini.date()}→{d_fim.date()}): {len(deck)} produtos · {int(deck['caixas'].sum()) if len(deck) else 0} cx")
+
+    atualizar_status_arquivo("CORA (Pedidos)", "✅ OK",
+                             f"buffer {len(det_buf)} linhas · deck {len(deck)} produtos")
+    return det_buf
+
+
 def processar_pedidos_historico(conteudo_bytes):
     """Import HISTÓRICO de pedidos (meses antigos, ex.: 2025). Popula SÓ as tabelas que
     ACUMULAM por mês — vendas_cliente_produto, vd_pdv, vd_produto, rv_volume — e NÃO toca

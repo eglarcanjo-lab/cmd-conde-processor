@@ -6,7 +6,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_pedidos_historico, processar_rota_efetiva, processar_ln
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_cora, processar_pedidos_historico, processar_rota_efetiva, processar_ln
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -306,6 +306,15 @@ def upload_ambos():
             traceback.print_exc()
             resultados["buffer"] = f"❌ Erro: {str(e)[:100]}"
 
+    # CORA — fonte nova do Buffer + Deck (D+7). Independe de pedido_chave.
+    if "cora" in arquivos:
+        try:
+            df_c = processar_cora(arquivos["cora"].read())
+            resultados["cora"] = f"✅ {len(df_c)} linhas (Buffer CORA + Deck)"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["cora"] = f"❌ Erro: {str(e)[:100]}"
+
     # Libera a memória das fases pesadas do import (Render free = 512MB).
     import gc
     df_clientes = None
@@ -442,6 +451,23 @@ def upload_buffer():
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("030111 (Buffer)", "❌ ERRO", str(e)[:200])
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/processar/cora", methods=["POST"])
+def upload_cora():
+    """Consulta-pedidos do CORA — fonte do Buffer (novo) e do Deck (D+7).
+    Não depende de pedido_chave (o CORA já traz volume/produto por linha)."""
+    if not verificar_token(request):
+        return jsonify({"error": "Token inválido."}), 401
+    if "arquivo" not in request.files:
+        return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
+    try:
+        df = processar_cora(request.files["arquivo"].read())
+        return jsonify({"success": True, "message": f"CORA processado: {len(df)} linhas (buffer)."})
+    except Exception as e:
+        traceback.print_exc()
+        atualizar_status_arquivo("CORA (Pedidos)", "❌ ERRO", str(e)[:200])
         return jsonify({"error": str(e)}), 500
 
 
