@@ -752,6 +752,14 @@ def processar_pedidos_historico(conteudo_bytes):
     _processar_vendas_diaria(df);  gc.collect()   # vd_pdv / vd_produto (por mês)
     processar_volume_rv(df);       gc.collect()   # rv_volume (por mês)
 
+    # Registra SKUs novos (dos arquivos históricos) na produtos_base, preservando as
+    # categorias já cadastradas — os sem categoria caem em "Produtos sem categoria"
+    # pra você preencher; ao reimportar, o volume deles passa a somar na categoria.
+    try:
+        _registrar_sem_categoria(df, mapa_produtos); gc.collect()
+    except Exception as _e:
+        print(f"  ⚠️ sem_categoria (histórico): {_e}")
+
     meses = sorted(df["_data"].dt.strftime("%Y-%m").unique().tolist())
     n = len(df)
     del df; gc.collect()

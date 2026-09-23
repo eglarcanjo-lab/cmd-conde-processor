@@ -324,6 +324,15 @@ def upload_ambos():
             traceback.print_exc()
             resultados["coleta"] = f"❌ Erro: {str(e)[:100]}"
 
+    # Pedidos HISTÓRICO (meses antigos, ex.: 2025) — só tabelas mensais + sem-categoria.
+    if "pedidos_historico" in arquivos:
+        try:
+            r_h = processar_pedidos_historico(arquivos["pedidos_historico"].read())
+            resultados["pedidos_historico"] = f"✅ {r_h['linhas']} linhas · meses {','.join(r_h['meses'])}"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["pedidos_historico"] = f"❌ Erro: {str(e)[:100]}"
+
     # Libera a memória das fases pesadas do import (Render free = 512MB).
     import gc
     df_clientes = None
