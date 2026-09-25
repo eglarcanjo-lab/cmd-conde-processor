@@ -3429,6 +3429,7 @@ def calcular_todos_spo_tasks():
         ("Tasks MATCH",         lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "match",       None,           "spo_tasks_match_resumo",      "SPO - Tasks MATCH",      60, mes_ref=_mr)),
         ("Tasks Cerveja Zero",  lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        r"\bzero\b|\bcero\b", "spo_tasks_cerv_zero_resumo", "SPO - Tasks Cerveja Zero", 60, mes_ref=_mr)),
         ("Tasks Digitalização", lambda: _calcular_tasks_com_df(df_tasks, "digitalização bees",            None,          None,           "spo_tasks_digit_resumo",      "SPO - Tasks Digitalização",60, mes_ref=_mr)),
+        ("Tasks SKU/PDV TT",    lambda: _calcular_sku_pdv_com_df(df_tasks, mes_ref=_mr)),
         # +LN saiu daqui: agora vem de um arquivo dedicado (processar_ln / campo spo_ln).
     ]
 
@@ -3495,6 +3496,72 @@ def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_n
     sobrescrever_aba(aba, pd.DataFrame(resumo))
     atualizar_status_arquivo(status_nome, "✅ OK", f"Operação: {pct_op}% ({validas_op}/{total_op} tasks)")
     print(f"    ✅ {pct_op}% operação")
+
+
+def _sem_acento(s):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", str(s)) if not unicodedata.combining(c)).lower().strip()
+
+
+# Texto da task SKU/PDV TT: "... N SKUs distintos de {CERVEJA|NAB|MATCH|MARKETPLACE}".
+# Cestas (600mL, Long Neck, RGB...) não casam porque exigem a categoria logo após "de".
+_RE_SKU_PDV = r"skus?\s+distintos\s+de\s+(cervejas?|nab|match|marketplace)\b"
+
+
+def _calcular_sku_pdv_com_df(df_tasks, mes_ref=None):
+    """Tarefas de SKU/PDV TT (KPI 26 / ord 13). Doc: tasks com o texto
+    "SKUs distintos de {CERVEJA, NAB, MATCH, MARKETPLACE}" nos clusters
+    "Desenvolvimento de Portfólio" e "Marketplace". Realizado = Σ tasks VALID na
+    operação. Tri = acumulado (soma meta/real dos 3 meses, via spo_metas).
+    Gera spo_tasks_sku_pdv_resumo (por mês, com quebra por categoria) e _detalhe."""
+    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    CLUSTERS = {"desenvolvimento de portfolio", "marketplace"}
+    META = 60
+    status_nome = "SPO - Tasks SKU/PDV TT"
+
+    clus = df_tasks["cluster_primario"].apply(_sem_acento)
+    cat = df_tasks["descricao"].apply(_sem_acento).str.extract(_RE_SKU_PDV, expand=False)
+    df = df_tasks[clus.isin(CLUSTERS) & cat.notna()].copy()
+    df["_cat"] = cat[df.index].str.rstrip("s").str.upper()   # CERVEJAS → CERVEJA
+    df["_setor"] = df["setor"].astype(str).str.strip()
+    df = df[df["_setor"].isin(SETORES_LOCAL)]
+    print(f"  [{status_nome}] {len(df)} tasks encontradas")
+    if df.empty:
+        return
+    df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
+    mes_ref = mes_ref or _mes_ref_do_dado(df, "mes_ano", "data_visita")
+
+    CATS = ["CERVEJA", "NAB", "MATCH", "MARKETPLACE"]
+    def _linha(setor, grp):
+        total = len(grp); validas = int(grp["_valida"].sum())
+        pct = round(validas / total * 100, 1) if total > 0 else 0
+        linha = {"setor": setor, "tasks_total": total, "tasks_validas": validas,
+                 "pct": pct, "ok": "OK" if pct >= META else "NOK"}
+        for c in CATS:
+            g = grp[grp["_cat"] == c]
+            linha[f"{c.lower()}_total"] = len(g)
+            linha[f"{c.lower()}_validas"] = int(g["_valida"].sum())
+        linha["mes_referencia"] = mes_ref
+        return linha
+
+    resumo = [_linha(s, df[df["_setor"] == s]) for s in sorted(df["_setor"].unique())]
+    op = _linha("OPERACAO", df)
+    resumo.append(op)
+    sobrescrever_por_mes("spo_tasks_sku_pdv_resumo", pd.DataFrame(resumo), "mes_referencia")
+
+    col = lambda c: df[c].astype(str).str.strip() if c in df.columns else ""
+    det = pd.DataFrame({
+        "setor": df["_setor"], "gv": col("gv"), "cod_pdv": col("cod_pdv"),
+        "categoria": df["_cat"], "descricao": col("descricao"),
+        "qtd_solicitada": col("qtd_solicitada"), "qtd_comprada": col("qtd_comprada"),
+        "status": col("status").str.upper(), "data_visita": col("data_visita"),
+        "mes_referencia": mes_ref,
+    }).sort_values(["setor", "status", "categoria"])
+    sobrescrever_aba("spo_tasks_sku_pdv_detalhe", det)
+
+    atualizar_status_arquivo(status_nome, "✅ OK",
+        f"Operação: {op['tasks_validas']} validadas de {op['tasks_total']} ({op['pct']}%)")
+    print(f"    ✅ SKU/PDV TT ({mes_ref}): {op['tasks_validas']}/{op['tasks_total']} validadas")
 
 
 _MES_PT_REV = {"jan":1,"fev":2,"mar":3,"abr":4,"mai":5,"jun":6,"jul":7,"ago":8,"set":9,"out":10,"nov":11,"dez":12}
