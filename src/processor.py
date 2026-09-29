@@ -375,6 +375,22 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
                 ag["hl_entrega"]  = ag["hl_entrega"].round(3)
                 sobrescrever_aba("pedido_bees", ag)
                 print(f"  📦 pedido_bees: {len(ag)} pedidos BEES")
+
+                # Itens (produtos) de cada pedido BEES — abre na Pesquisa Pedido.
+                it = pd.DataFrame({
+                    "bees":         pb["bees"],
+                    "cod_produto":  df.loc[pb.index, "Cod. Prod."].astype(str).str.strip(),
+                    "nome_produto": df.loc[pb.index, "Nome Prod."].astype(str).str.strip(),
+                    "hl_marcacao":  pb["hl_marcacao"],
+                    "hl_entrega":   pb["hl_entrega"],
+                })
+                it = (it.groupby(["bees", "cod_produto", "nome_produto"], as_index=False)
+                        .agg(hl_marcacao=("hl_marcacao", "sum"), hl_entrega=("hl_entrega", "sum"))
+                        .sort_values(["bees", "hl_marcacao"], ascending=[True, False]))
+                it["hl_marcacao"] = it["hl_marcacao"].round(3)
+                it["hl_entrega"]  = it["hl_entrega"].round(3)
+                sobrescrever_aba("pedido_bees_itens", it)
+                print(f"  📦 pedido_bees_itens: {len(it)} itens")
         except Exception as _eb:
             print(f"  ⚠️ pedido_bees: {_eb}")
 
