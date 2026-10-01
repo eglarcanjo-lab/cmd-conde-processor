@@ -1269,6 +1269,55 @@ def _registrar_sem_categoria(df, mapa_produtos):
     print(f"  📦 {len(todos_prods)} produtos na base")
 
 
+def processar_comodatos(conteudo_bytes):
+    """Relatório de COMODATOS do Promax (equipamentos/vasilhame cedidos ao PDV).
+    Quem aparece na relação TEM comodato. Gera a aba `comodatos` (snapshot): 1 linha por
+    equipamento/contrato com qtd comodatada, baixada e em aberto (= comodatado − baixado).
+    Usada na prévia de INATIVAÇÃO de PDV (Solicitações › Migração)."""
+    print("📂 Processando comodatos...")
+    df = ler_csv_inf(conteudo_bytes)
+    df.columns = [str(c).strip() for c in df.columns]
+    obrig = ["Cliente", "Nome / Razao", "Codigo Setor", "Descricao", "Comodatado", "Baixado"]
+    falta = [c for c in obrig if c not in df.columns]
+    if falta:
+        raise ValueError(f"Arquivo de comodatos fora do layout — faltam colunas: {falta}")
+
+    def txt(c):
+        return df[c].astype(str).str.strip() if c in df.columns else ""
+
+    def inteiro(c):
+        return pd.to_numeric(txt(c).str.replace(".", "", regex=False), errors="coerce").fillna(0).astype(int)
+
+    def valor(c):
+        return pd.to_numeric(txt(c).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+                             errors="coerce").fillna(0.0)
+
+    out = pd.DataFrame({
+        "cod_pdv":         txt("Cliente").str.lstrip("0"),
+        "nome_pdv":        txt("Nome / Razao"),
+        "setor":           df["Codigo Setor"].apply(normalizar_setor),
+        "nro_comodato":    txt("Nro Comodato").str.lstrip("0"),
+        "cod_produto":     txt("Codigo Produto").str.lstrip("0"),
+        "descricao":       txt("Descricao").str.rstrip(",").str.replace(",", " ", regex=False).str.replace(r"\s+", " ", regex=True),
+        "tipo_material":   txt("Tipo Material"),
+        "comodatado":      inteiro("Comodatado"),
+        "baixado":         inteiro("Baixado"),
+        "valor":           valor("Valor").round(2),
+        "status_cliente":  txt("Status Cliente"),
+        "data_emissao":    txt("Data Emissao"),
+        "vencimento":      txt("Vencimento"),
+        "status_auditoria": txt("Status Auditoria"),
+        "data_recolha":    txt("Data Recolha").replace("00/00/0000", ""),
+    })
+    out["em_aberto"] = (out["comodatado"] - out["baixado"]).clip(lower=0)
+    out = out[out["cod_pdv"] != ""]
+    sobrescrever_aba("comodatos", out)
+    n_pdv = out["cod_pdv"].nunique()
+    atualizar_status_arquivo("Comodatos", "✅ OK", f"{n_pdv} PDVs · {len(out)} equipamentos/contratos")
+    print(f"  ✅ comodatos: {n_pdv} PDVs · {len(out)} linhas")
+    return {"pdvs": n_pdv, "linhas": len(out)}
+
+
 def processar_inadimplencia(conteudo_bytes):
     """
     Processa o arquivo 120601 (inadimplência).
