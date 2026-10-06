@@ -1966,6 +1966,15 @@ def _normalizar_cat_rv(cat_raw):
     return _MAP.get(cat, cat)
 
 
+def _mes_rv_fechado(mes):
+    """True se a RV do mês foi fechada no app (tabela rv_fechamentos, criada pelo backend)."""
+    try:
+        df = ler_aba("rv_fechamentos")
+        return (not df.empty) and "mes" in df.columns and str(mes) in set(df["mes"].astype(str).str.strip())
+    except Exception:
+        return False
+
+
 def calcular_rv_completa(mes_ref=None):
     """
     Calcula a RV para todos os RNs com base nos dados já processados.
@@ -1974,6 +1983,10 @@ def calcular_rv_completa(mes_ref=None):
     (substitui só o mês calculado — o histórico dos outros meses fica).
     """
     _mes_rv = str(mes_ref).strip() if mes_ref else date.today().strftime("%Y-%m")
+    # RV FECHADA (congelada no app): não recalcula — o que foi pago não muda.
+    if _mes_rv_fechado(_mes_rv):
+        print(f"🔒 RV de {_mes_rv} está FECHADA — recálculo ignorado.")
+        return pd.DataFrame()
     print(f"📊 Calculando RV completa · mês {_mes_rv}...")
 
     # Linhas sem mês contam como o mês-alvo (compatibilidade com dados antigos).
