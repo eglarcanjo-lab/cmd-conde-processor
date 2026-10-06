@@ -680,7 +680,7 @@ def processar_cora(conteudo_bytes):
 # Regras (Eduardo, out/2026):
 #   • VENDA = Cód. operação (AR) = 1 · item ATENDIDO (Situação atend. item) · item/pedido
 #     não devolvido/cancelado (Situação item). Inclui o que está em rota (MPD_*), não só ENTREGUE.
-#   • Volume = Volume hectolitro (CS), lançado no DIA DE EMISSÃO DA NF (EB). Sem NF → Data entrega (D).
+#   • Volume = Volume hectolitro (CS), lançado no DIA DE EMISSÃO DA NF (EB). Sem NF → entrega − 1 dia (D+1 = venda do dia).
 #   • Devolução = Situação pedido FATURADO_NF_DEVOLVIDA; motivo = código (EH) → tabela de motivos;
 #     código desconhecido vira ocorrência (motivos_devolucao_pendentes) p/ cadastrar.
 #   • Buffer = Tipo buffer (W) = REPROGRAMADO.
@@ -746,7 +746,10 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     df["_hl"] = _num_br(t("Volume hectolitro"))
     d_ent = pd.to_datetime(t("Data entrega"), format="%d/%m/%Y", errors="coerce")
     d_nf = pd.to_datetime(t("Data emissão NF"), format="%d/%m/%Y", errors="coerce")
-    df["_data"] = d_nf.fillna(d_ent)
+    # Sem NF ainda → entrega − 1 dia (a NF sai sempre na véspera da entrega). Assim o pedido de
+    # hoje p/ entrega amanhã (D+1) já conta como venda/volume diário de HOJE e não muda de dia
+    # quando a NF for emitida.
+    df["_data"] = d_nf.fillna(d_ent - pd.Timedelta(days=1))
     df["_mes"] = df["_data"].dt.strftime("%Y-%m")
 
     # Proteção de mês: só meses COBERTOS pelo arquivo (entregas dentro do mês) e a partir da

@@ -877,7 +877,7 @@ ORDEM = ["clientes", "produtos_base", "faturamento_mktp", "pontos_bees",
          "spo_visitacao_gv", "spo_coaching", "spo_dto", "spo_promo", "spo_score5",
          "spo_alone", "spo_rgb", "spo_cupons", "spo_loja_ideal", "spo_scanntech",
          "spo_portfolio_ideal", "spo_ap", "tasks", "inadimplencia", "devolucoes",
-         "pedidos", "grade"]
+         "pedidos", "cora", "comodatos", "grade"]
 
 
 def detectar_tipo(nome):
@@ -887,6 +887,11 @@ def detectar_tipo(nome):
         return "tasks"
     if "ponto" in low or "bees" in low:
         return "pontos_bees"
+    # CORA (consulta-pedidos completo) e Comodatos — pelo nome do arquivo
+    if "consulta-pedidos" in low or "consulta_pedidos" in low or low.startswith("cora"):
+        return "cora"
+    if "comodato" in low:
+        return "comodatos"
     m = re.search(r"#\s*(\d+)", base)
     if m and m.group(1) in ITENS_BI:
         return ITENS_BI[m.group(1)]
@@ -987,6 +992,16 @@ def upload_zip():
                     dfc = ler_aba("pdv_base")
                 processar_pedidos(b, dfc if dfc is not None and not dfc.empty else None)
                 precisa_rv = True
+            elif campo == "cora":
+                dfc = df_clientes
+                if dfc is None or dfc.empty:
+                    dfc = ler_aba("pdv_base")
+                r_c = processar_cora_completo(b, mes_ref=mes_ref, df_clientes=dfc if dfc is not None and not dfc.empty else None)
+                resultados[campo] = "✅ " + " · ".join(f"{k}: {v}" for k, v in r_c.items())
+                precisa_rv = True
+                continue
+            elif campo == "comodatos":
+                processar_comodatos(b)
             elif campo == "grade":
                 processar_grade_estoque(b)
             resultados[campo] = "✅ OK"
