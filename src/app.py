@@ -6,7 +6,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_cora, processar_coleta, processar_pedidos_historico, processar_rota_efetiva, processar_ln, processar_comodatos
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_cora, processar_coleta, processar_pedidos_historico, processar_rota_efetiva, processar_ln, processar_comodatos, processar_cora_completo
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -306,11 +306,14 @@ def upload_ambos():
             traceback.print_exc()
             resultados["buffer"] = f"❌ Erro: {str(e)[:100]}"
 
-    # CORA — fonte nova do Buffer + Deck (D+7). Independe de pedido_chave.
+    # CORA — consulta-pedidos COMPLETO: fonte única de Pedidos (venda/volume), Devoluções,
+    # Faturados (NF), Faturamento Mktp e Buffer + Deck D+7 (arquivo reduzido → só Buffer+Deck).
     if "cora" in arquivos:
         try:
-            df_c = processar_cora(arquivos["cora"].read())
-            resultados["cora"] = f"✅ {len(df_c)} linhas (Buffer CORA + Deck)"
+            r_c = processar_cora_completo(
+                arquivos["cora"].read(), mes_ref=_mes_ref,
+                df_clientes=df_clientes if df_clientes is not None and not df_clientes.empty else None)
+            resultados["cora"] = "✅ " + " · ".join(f"{k}: {v}" for k, v in r_c.items())
         except Exception as e:
             traceback.print_exc()
             resultados["cora"] = f"❌ Erro: {str(e)[:100]}"
@@ -351,7 +354,7 @@ def upload_ambos():
     # (Ficou desligada por um tempo por causa de OOM no Render free — cobertura ~20k
     # somada ao import estourava 512MB. Com a importação agora mês a mês os arquivos
     # são menores e a memória cabe; a fase pesada do import já foi liberada acima com gc.)
-    rv_keys = {"pedidos", "faturamento_mktp", "pontos_bees", "spo_ap"}
+    rv_keys = {"pedidos", "faturamento_mktp", "pontos_bees", "spo_ap", "cora"}
     if rv_keys & set(arquivos.keys()):
         try:
             gc.collect()
@@ -490,8 +493,12 @@ def upload_cora():
     if "arquivo" not in request.files:
         return jsonify({"error": "Envie o arquivo no campo 'arquivo'."}), 400
     try:
-        df = processar_cora(request.files["arquivo"].read())
-        return jsonify({"success": True, "message": f"CORA processado: {len(df)} linhas (buffer)."})
+        r = processar_cora_completo(request.files["arquivo"].read(), mes_ref=request.form.get("mes_ref") or None)
+        try:
+            calcular_rv_completa()
+        except Exception as e_rv:
+            print(f"  ⚠️ Auto-recalc RV após CORA: {e_rv}")
+        return jsonify({"success": True, "message": "CORA processado: " + " · ".join(f"{k}: {v}" for k, v in r.items())})
     except Exception as e:
         traceback.print_exc()
         atualizar_status_arquivo("CORA (Pedidos)", "❌ ERRO", str(e)[:200])

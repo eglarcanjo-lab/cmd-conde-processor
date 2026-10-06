@@ -381,7 +381,8 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
                     mapa=("mapa", "first"), entrega_real=("entrega_real", "first"),
                     hl_marcacao=("hl_marcacao", "sum"), hl_entrega=("hl_entrega", "sum"))
                 # Motivo de devolução = 1º motivo diferente de "Pedido Normal" entre os itens.
-                nn = pb[~pb["motivo"].str.upper().isin(["PEDIDO NORMAL", ""])].groupby("bees")["motivo"].first()
+                # FALTA (item cortado) não é devolução — não marca o pedido como devolvido.
+                nn = pb[~pb["motivo"].str.upper().isin(["PEDIDO NORMAL", "FALTA", ""])].groupby("bees")["motivo"].first()
                 ag["motivo"] = ag["bees"].map(nn).fillna("")
                 ag["hl_marcacao"] = ag["hl_marcacao"].round(3)
                 ag["hl_entrega"]  = ag["hl_entrega"].round(3)
@@ -635,8 +636,8 @@ def processar_cora(conteudo_bytes):
     df["_data_entrega"] = pd.to_datetime(df["data_entrega"].astype(str).str.strip(),
                                          format="%d/%m/%Y", errors="coerce")
 
-    # ── 1) BUFFER — 'Tipo buffer' ≠ vazio (Reprogramado/Preservado), setor válido ──
-    buf = df[(df["_tipo_buffer"] != "") & (df["_setor"].isin(SETORES_VALIDOS)) & (df["_num_pedido"] != "")].copy()
+    # ── 1) BUFFER — 'Tipo buffer' = REPROGRAMADO (regra out/2026), setor válido ──
+    buf = df[(df["_tipo_buffer"].str.upper() == "REPROGRAMADO") & (df["_setor"].isin(SETORES_VALIDOS)) & (df["_num_pedido"] != "")].copy()
     if buf.empty:
         det_buf = pd.DataFrame(columns=["setor", "cod_pdv", "nome_pdv", "num_pedido", "tipo_operacao", "volume_marcacao"])
     else:
@@ -670,6 +671,222 @@ def processar_cora(conteudo_bytes):
     atualizar_status_arquivo("CORA (Pedidos)", "✅ OK",
                              f"buffer {len(det_buf)} linhas · deck {len(deck)} produtos")
     return det_buf
+
+
+# ══ CORA — FONTE ÚNICA (consulta-pedidos completa, 143 colunas, 1 linha por ITEM) ══════
+# Um só arquivo alimenta: Pedidos (venda/volume → todas as análises e RV), Devoluções,
+# Faturados (NF), Faturamento Marketplace e Buffer + Deck D+7.
+#
+# Regras (Eduardo, out/2026):
+#   • VENDA = Cód. operação (AR) = 1 · item ATENDIDO (Situação atend. item) · item/pedido
+#     não devolvido/cancelado (Situação item). Inclui o que está em rota (MPD_*), não só ENTREGUE.
+#   • Volume = Volume hectolitro (CS), lançado no DIA DE EMISSÃO DA NF (EB). Sem NF → Data entrega (D).
+#   • Devolução = Situação pedido FATURADO_NF_DEVOLVIDA; motivo = código (EH) → tabela de motivos;
+#     código desconhecido vira ocorrência (motivos_devolucao_pendentes) p/ cadastrar.
+#   • Buffer = Tipo buffer (W) = REPROGRAMADO.
+#   • Proteção de mês: só são gravados os meses que o arquivo COBRE (há entregas no mês, col D).
+#     NF de um mês não coberto (ex.: NF 30/09 entregue 01/10 num arquivo só de outubro) é
+#     ignorada — senão o import apagaria o mês anterior inteiro (as tabelas substituem por mês).
+
+MOTIVOS_DEVOLUCAO_PADRAO = {
+    "37": "PDV FECHADO", "45": "TEMPO INSUFICIENTE", "33": "NAO FEZ PEDIDO", "48": "PDV FECHADO APOS",
+    "38": "SEM DINHEIRO", "39": "CLIENTE CANCELOU", "71": "SEM DINHEIRO/CHEQUE", "47": "DIFICIL ACESSO",
+    "46": "ENDERECO NAO ENCONTRADO", "41": "SEM VASILHAME", "64": "SEM VASILHAME",
+    "23": "(C)PEDIDOS DUPLICADOS", "50": "CARGA ERRADA ARMAZEM", "86": "HORARIO DE ENTREGA",
+}
+
+
+def _motivos_devolucao():
+    """Código → descrição: padrão + os cadastrados no app (tabela motivos_devolucao)."""
+    m = dict(MOTIVOS_DEVOLUCAO_PADRAO)
+    try:
+        t = ler_aba("motivos_devolucao")
+        if not t.empty and "cod" in t.columns:
+            for _, r in t.iterrows():
+                c = str(r.get("cod", "")).strip().lstrip("0")
+                d = str(r.get("descricao", "") or "").strip().upper()
+                if c and d:
+                    m[c] = d
+    except Exception:
+        pass
+    return m
+
+
+def _num_br(serie):
+    return pd.to_numeric(serie.astype(str).str.strip().str.replace(".", "", regex=False)
+                         .str.replace(",", ".", regex=False), errors="coerce").fillna(0.0)
+
+
+def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
+    """Importa o consulta-pedidos COMPLETO do CORA e alimenta todas as rotinas que antes
+    vinham de relatórios separados do Promax. Retorna um resumo por rotina."""
+    import io as _io
+    print("📂 Processando CORA completo (consulta-pedidos)...")
+    df = ler_csv_inf(conteudo_bytes)
+    df.columns = [str(c).strip() for c in df.columns]
+    obrig = ["Número pedido", "Data entrega", "Cód. cliente", "Situação pedido", "Situação atend. item",
+             "Cód. operação", "Cód. setor", "Cód. produto", "Volume hectolitro", "Data emissão NF", "Número NF"]
+    falta = [c for c in obrig if c not in df.columns]
+    if falta:
+        # Arquivo antigo (só ~19 colunas): segue só com Buffer + Deck, como antes.
+        print(f"  ⚠️ CORA sem colunas do relatório completo ({falta[:4]}…) — só Buffer + Deck.")
+        d = processar_cora(conteudo_bytes)
+        return {"buffer_deck": f"{len(d)} linhas (arquivo reduzido — importe o relatório completo)"}
+
+    t = lambda c: df[c].astype(str).str.strip().replace("nan", "") if c in df.columns else pd.Series("", index=df.index)
+    df["_setor"] = df["Cód. setor"].apply(normalizar_setor)
+    df["_sit_ped"] = t("Situação pedido").str.upper()
+    df["_sit_item"] = t("Situação item").str.upper()
+    df["_atend_item"] = t("Situação atend. item").str.upper()
+    df["_op"] = t("Cód. operação").str.lstrip("0")
+    df["_hl"] = _num_br(t("Volume hectolitro"))
+    d_ent = pd.to_datetime(t("Data entrega"), format="%d/%m/%Y", errors="coerce")
+    d_nf = pd.to_datetime(t("Data emissão NF"), format="%d/%m/%Y", errors="coerce")
+    df["_data"] = d_nf.fillna(d_ent)
+    df["_mes"] = df["_data"].dt.strftime("%Y-%m")
+
+    # Proteção de mês: só meses COBERTOS pelo arquivo (entregas dentro do mês).
+    cobertos = set(d_ent.dt.strftime("%Y-%m").dropna())
+    fora = df["_mes"].notna() & ~df["_mes"].isin(cobertos)
+    if fora.any():
+        print(f"  ⚠️ {int(fora.sum())} linhas com NF em mês não coberto pelo arquivo "
+              f"({sorted(df.loc[fora, '_mes'].unique())}) — ignoradas p/ não sobrescrever o mês.")
+    df = df[~fora & df["_mes"].notna()].copy()
+    meses = sorted(df["_mes"].unique())
+    print(f"  📅 Meses cobertos e gravados: {meses}")
+
+    CANCEL = {"CANCELADO", "FATURADO_NF_DEVOLVIDA", "FATURADO_NF_CANCELADA"}
+    df["_venda"] = ((df["_op"] == "1") & (df["_atend_item"] == "ATENDIDO") &
+                    ~df["_sit_item"].isin(CANCEL) & ~df["_sit_ped"].isin(CANCEL))
+    df["_devolvido"] = df["_sit_ped"] == "FATURADO_NF_DEVOLVIDA"
+    motivos = _motivos_devolucao()
+    df["_cod_motivo"] = t("Motivo devol./cancel. NF").str.lstrip("0")   # "0" = sem motivo → ""
+    df["_desc_motivo"] = df["_cod_motivo"].map(lambda c: motivos.get(c, f"MOTIVO {c} (NÃO CADASTRADO)") if c else "")
+    res = {}
+
+    # ── 2) DEVOLUÇÕES → entregas_frustradas (1 linha por NF devolvida, acumula por mês) ──
+    dv = df[df["_devolvido"] & (t("Número NF").loc[df.index] != "") & df["_setor"].isin(SETORES_VALIDOS)].copy()
+    cols_out = ["setor", "data", "nota", "cod_pdv", "nome_pdv", "placa", "valor", "volume_hl",
+                "data_devol", "cod_motivo", "desc_motivo", "mes_referencia"]
+    if not dv.empty:
+        dv["_nota"] = t("Número NF").loc[dv.index].str.lstrip("0")
+        dv["_vnf"] = _num_br(t("Valor total NF").loc[dv.index])
+        out = (dv.groupby("_nota", as_index=False).agg(
+            setor=("_setor", "first"), data=("_data", "first"), cod_pdv=("Cód. cliente", "first"),
+            nome_pdv=("Nome cliente", "first"), placa=("Placa", "first"), valor=("_vnf", "first"),
+            volume_hl=("_hl", "sum"), data_devol=("Data devol./cancel. NF", "first"),
+            cod_motivo=("_cod_motivo", "first"), desc_motivo=("_desc_motivo", "first"), mes_referencia=("_mes", "first"))
+            .rename(columns={"_nota": "nota"}))
+        out["data"] = out["data"].dt.strftime("%d/%m/%Y")
+        out["cod_pdv"] = out["cod_pdv"].astype(str).str.strip().str.lstrip("0")
+        for c in ("nome_pdv", "placa", "data_devol"):
+            out[c] = out[c].astype(str).str.strip().replace("nan", "")
+        out["valor"] = out["valor"].round(2); out["volume_hl"] = out["volume_hl"].round(3)
+        out = out[cols_out]
+    else:
+        out = pd.DataFrame(columns=cols_out)
+    try:
+        antigo = ler_aba("entregas_frustradas")
+        if not antigo.empty and "mes_referencia" in antigo.columns:
+            antigo = antigo[~antigo["mes_referencia"].astype(str).isin(meses)]
+            for c in cols_out:
+                if c not in antigo.columns:
+                    antigo[c] = ""
+            out = pd.concat([antigo[cols_out], out], ignore_index=True)
+    except Exception as e:
+        print(f"  ⚠️ devoluções anteriores não lidas: {e}")
+    sobrescrever_aba("entregas_frustradas", out.sort_values(["mes_referencia", "setor", "data"]))
+    novos = out[out["mes_referencia"].astype(str).isin(meses)]
+    res["devolucoes"] = f"{len(novos)} NFs devolvidas"
+    atualizar_status_arquivo("Devoluções (Entregas Frustradas)", "✅ OK", f"CORA · {len(novos)} NFs · meses {', '.join(meses)}")
+
+    # Ocorrências: códigos de motivo sem cadastro (p/ cadastrar no app)
+    pend = dv[~dv["_cod_motivo"].isin(motivos.keys()) & (dv["_cod_motivo"] != "")] if not dv.empty else dv
+    if not pend.empty:
+        oc = (pend.groupby("_cod_motivo").agg(nfs=("Número NF", "nunique"), ultima=("_data", "max")).reset_index()
+              .rename(columns={"_cod_motivo": "cod"}))
+        oc["ultima"] = oc["ultima"].dt.strftime("%d/%m/%Y")
+    else:
+        oc = pd.DataFrame(columns=["cod", "nfs", "ultima"])
+    sobrescrever_aba("motivos_devolucao_pendentes", oc)
+    if len(oc):
+        res["motivos_novos"] = f"⚠️ {len(oc)} código(s) de motivo sem cadastro: {', '.join(oc['cod'])}"
+
+    # ── 1) PEDIDOS → formato Promax 03014701 → processar_pedidos (todas as análises) ──
+    dd = lambda s: s.dt.strftime("%d/%m/%Y").fillna("")
+    fmt = lambda v: v.round(3).map(lambda x: f"{x:.3f}".replace(".", ","))
+    ped = pd.DataFrame({
+        "Setor":              df["_setor"],
+        "Nome Setor":         t("Desc. setor").loc[df.index],
+        "Data":               dd(df["_data"]),
+        "Cliente":            t("Cód. cliente").loc[df.index],
+        "Nome Cliente":       t("Nome cliente").loc[df.index],
+        "Cod. Prod.":         t("Cód. produto").loc[df.index],
+        "Nome Prod.":         t("Desc. produto").loc[df.index],
+        "Volume Marcacao":    fmt(df["_hl"]),
+        "Volume Entrega":     fmt(df["_hl"].where(df["_venda"], 0.0)),
+        "Motivo":             df["_desc_motivo"].where(df["_devolvido"],
+                                  pd.Series("Pedido Normal", index=df.index).where(df["_atend_item"] != "FALTA", "FALTA")),
+        "Desc Tipo Movimento": t("Desc. tipo movimento").loc[df.index].str.upper(),
+        "Nota Fiscal":        t("Número NF").loc[df.index],
+        "Pedido Cliente":     t("Número pedido cliente").loc[df.index],
+        "Pedido":             t("Número pedido").loc[df.index],
+        "Nr. Pedido":         t("Número pedido").loc[df.index],
+        "Mapa":               t("Itinerário").loc[df.index],
+        "Entrega Real":       dd(d_ent.loc[df.index].where(df["_sit_ped"] == "ENTREGUE")),
+    })
+    buf = _io.StringIO(); ped.to_csv(buf, sep=";", index=False)
+    processar_pedidos(buf.getvalue().encode("utf-8"), df_clientes)
+    v = df[df["_venda"]]
+    res["pedidos"] = f"{v['_hl'].sum():,.1f} HL vendidos · {v['Número pedido'].nunique()} pedidos · meses {', '.join(meses)}"
+
+    # ── 3) FATURADOS (NF) → faturados_detalhe + faturado_nf ──────────────────────────
+    nfok = (t("Número NF").loc[df.index] != "") & (df["_sit_ped"] != "FATURADO_NF_CANCELADA") & df["_setor"].isin(SETORES_VALIDOS)
+    ft = df[nfok].copy()
+    ft["_num_pedido"] = t("Número pedido").loc[ft.index].str.lstrip("0")
+    ft["_cod_pdv"] = t("Cód. cliente").loc[ft.index].str.lstrip("0")
+    ft["_nome_pdv"] = t("Nome cliente").loc[ft.index]
+    base_f = ft[["_setor", "_cod_pdv", "_nome_pdv", "_num_pedido"]].drop_duplicates()
+    sobrescrever_aba("faturados_detalhe", _montar_detalhe_pedidos(base_f[base_f["_num_pedido"] != ""]))
+    if not ft.empty:
+        ft["_nf"] = t("Número NF").loc[ft.index].str.lstrip("0")
+        ft["_vnf"] = _num_br(t("Valor total NF").loc[ft.index])
+        ft["_mapa"] = t("Itinerário").loc[ft.index]
+        fnf = ft.groupby("_nf", as_index=False).agg(
+            setor=("_setor", "first"), cod_pdv=("_cod_pdv", "first"), nome_pdv=("_nome_pdv", "first"),
+            mapa=("_mapa", "first"), valor=("_vnf", "first"), itens=("_hl", "size")).rename(columns={"_nf": "nf"})
+        fnf["valor"] = fnf["valor"].round(2)
+        sobrescrever_aba("faturado_nf", fnf)
+        res["faturados"] = f"{len(fnf)} NFs · R$ {fnf['valor'].sum():,.2f}"
+    atualizar_status_arquivo("030237 (Faturados)", "✅ OK", f"CORA · {res.get('faturados', '0 NFs')}")
+
+    # ── 4) FATURAMENTO MARKETPLACE → rv_faturamento_mktp (R$ sem ADF, por setor × mês) ──
+    df_prods = ler_aba("produtos_base")
+    mktp = set()
+    if not df_prods.empty and "cod" in df_prods.columns:
+        for _, r in df_prods.iterrows():
+            c = str(r.get("cod", "")).strip().lstrip("0")
+            if c and "MKTP" in str(r.get("categorias", "")).upper():
+                mktp.add(c)
+    vm = df[df["_venda"] & df["_setor"].isin(SETORES_VALIDOS)].copy()
+    vm["_cod_prod"] = t("Cód. produto").loc[vm.index].str.lstrip("0")
+    vm = vm[vm["_cod_prod"].isin(mktp)]
+    vm["_rs"] = _num_br(t("Valor sem ADF").loc[vm.index])
+    fm = (vm.groupby(["_setor", "_mes"])["_rs"].sum().reset_index()
+            .rename(columns={"_setor": "setor", "_mes": "mes_referencia", "_rs": "faturamento_mktp_real"}))
+    # garante linha (zerada) p/ todo mês coberto — substitui o mês mesmo sem venda Mktp
+    if fm.empty:
+        fm = pd.DataFrame({"setor": ["101"] * len(meses), "mes_referencia": meses, "faturamento_mktp_real": [0.0] * len(meses)})
+    fm["faturamento_mktp_real"] = fm["faturamento_mktp_real"].round(2)
+    sobrescrever_por_mes("rv_faturamento_mktp", fm[["setor", "faturamento_mktp_real", "mes_referencia"]], "mes_referencia")
+    res["faturamento_mktp"] = f"R$ {fm['faturamento_mktp_real'].sum():,.2f} ({len(mktp)} produtos MKTP)"
+    atualizar_status_arquivo("030509 (Faturamento Mktp)", "✅ OK", f"CORA · {res['faturamento_mktp']}")
+
+    # ── 5) BUFFER + DECK (rotina existente; lê o mesmo arquivo) ──────────────────────
+    d_bd = processar_cora(conteudo_bytes)
+    res["buffer_deck"] = f"buffer {d_bd['num_pedido'].nunique() if len(d_bd) else 0} pedidos"
+    atualizar_status_arquivo("CORA (Consulta-pedidos completo)", "✅ OK", " · ".join(f"{k}: {v}" for k, v in res.items()))
+    return res
 
 
 def processar_coleta(conteudo_bytes):
