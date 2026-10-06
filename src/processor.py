@@ -6,9 +6,13 @@ from categorias import resolver_categoria, carregar_base_produtos, CATEGORIAS_VA
 from sheets_service import ler_aba, sobrescrever_aba, sobrescrever_por_mes, atualizar_status_arquivo
 
 # Setores válidos da CMD Conde
+# Setores 301–305 foram RENOMEADOS para 107–111 (out/2026) e passaram para o GV1.
+# Todo setor lido passa por normalizar_setor/setor_hop, que aplica o de-para — dado novo
+# já entra como 107–111. 301–305 continuam "válidos" só para não descartar histórico.
+DE_PARA_SETOR = {"301": "107", "302": "108", "303": "109", "304": "110", "305": "111"}
 SETORES_VALIDOS = {
-    "101", "102", "103", "104", "105", "106",
-    "301", "302", "303", "304", "305"
+    "101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "111",
+    "301", "302", "303", "304", "305",
 }
 
 DIAS_SEMANA_MAP = {
@@ -38,11 +42,19 @@ def ler_csv_inf(conteudo_bytes, usecols=None):
 
 
 def normalizar_setor(setor_raw):
-    """Remove zeros à esquerda do setor. Ex: '00101' → '101'"""
+    """Remove zeros à esquerda do setor ('00101' → '101') e aplica o de-para dos setores
+    renomeados (301–305 → 107–111)."""
     try:
-        return str(int(str(setor_raw).strip()))
+        s = str(int(str(setor_raw).strip()))
     except:
-        return str(setor_raw).strip()
+        s = str(setor_raw).strip()
+    return DE_PARA_SETOR.get(s, s)
+
+
+def setor_hop(v):
+    """Setor já 'limpo' (texto) → aplica só o de-para (preserva 'OPERACAO' etc.)."""
+    s = str(v).strip()
+    return DE_PARA_SETOR.get(s, s)
 
 
 def normalizar_dia_visita(dia_raw):
@@ -1794,7 +1806,8 @@ def calcular_rv_volume(mes_referencia=None):
 META_PONTOS_BEES = 100_000  # Fixo. Alterar aqui se mudar.
 
 SEGMENTO_OFF = {"101", "102", "103"}  # AS/Rota/Sub: Cerveja+NAB+Mktp+Match
-SEGMENTO_ON  = {"104", "105", "106", "301", "302", "303", "304", "305"}  # On Trade: Cerveja+NAB+Mktp
+SEGMENTO_ON  = {"104", "105", "106", "107", "108", "109", "110", "111",
+                "301", "302", "303", "304", "305"}  # On Trade: Cerveja+NAB+Mktp (107–111 = ex-301–305)
 
 # Pesos oficiais do regulamento de RV (% do PO). Pontos Force = 50% (Meios);
 # os 50% restantes (Resultados) se dividem conforme o segmento.
@@ -2007,7 +2020,7 @@ def calcular_rv_completa(mes_ref=None):
     for _, row in df_metas.iterrows():
         if not _do_mes(row):
             continue
-        setor = str(row.get("setor", "")).strip()
+        setor = setor_hop(row.get("setor", ""))
         # Normaliza categoria: "CERVEJA (VOLUME)" → "CERVEJA", "PONTOS FORCE" → "PONTOS BEES"
         cat   = _normalizar_cat_rv(row.get("categoria", ""))
         meta  = pd.to_numeric(str(row.get("meta_volume", "0")).replace(",","."), errors="coerce") or 0
@@ -2054,7 +2067,7 @@ def calcular_rv_completa(mes_ref=None):
     for _, row in df_vol.iterrows():
         if not _do_mes(row, col="mes_ref"):
             continue
-        setor = str(row.get("setor", "")).strip()
+        setor = setor_hop(row.get("setor", ""))
         cat   = str(row.get("categoria", "")).strip().upper()
         vol   = float(row.get("volume", 0) or 0)
         if setor not in vol_map:
@@ -2166,7 +2179,7 @@ def processar_visitacao_gv(conteudo_bytes, mes_ref=None):
         raise ValueError(f"Colunas não encontradas. Disponíveis: {df.columns.tolist()}")
 
     df["_gv"]     = df[col_gv].str.strip()
-    df["_setor"]  = df[col_setor].str.strip()
+    df["_setor"]  = df[col_setor].str.strip().map(setor_hop)
     df["_pdv"]    = df[col_pdv].str.strip().str.lstrip("0")
     df["_visita"] = df[col_visita].str.strip().str.upper()
     df["_gps"]    = df[col_gps].str.strip().str.upper()
@@ -2261,7 +2274,7 @@ def processar_rota_coaching(conteudo_bytes):
     df = df[df["Tipo Visita"].str.strip().str.upper().isin(["COACHING"])].copy()
 
     df["_gv"]     = df["GV"].str.strip()
-    df["_setor"]  = df["Setor"].str.strip()
+    df["_setor"]  = df["Setor"].str.strip().map(setor_hop)
     df["_data"]   = pd.to_datetime(df["Data Visita"], errors="coerce").dt.strftime("%Y-%m-%d")
     df["_ok"]     = df["Coaching Dia"].str.strip().str.upper() == "OK"
     df["_mes"]    = pd.to_datetime(df["Data Visita"], errors="coerce").dt.strftime("%Y-%m")
@@ -2377,8 +2390,7 @@ def processar_rota_coaching(conteudo_bytes):
 
     # RNs sem coaching no trimestre
     todos_setores = {
-        "1": ["101","102","103","104","105","106"],
-        "3": ["301","302","303","304","305"],
+        "1": ["101","102","103","104","105","106","107","108","109","110","111"],   # 107–111 = ex-301–305 (GV1)
     }
     rns_com_coaching = df[df["_ok"]].groupby("_gv")["_setor"].apply(set).to_dict()
     mes_ref_tri = sorted(df["_mes"].dropna().unique())[-1] if len(df["_mes"].dropna().unique()) > 0 else date.today().strftime("%Y-%m")
@@ -2587,7 +2599,7 @@ def calcular_politica_comercial():
 
     TASKS_TTC_LOCAL = {"03_05_09", "03_03_01", "03_04_01", "03_05_10"}
     META_POLITICA_LOCAL = 60
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         df_tasks = ler_aba("tasks")
@@ -2606,7 +2618,7 @@ def calcular_politica_comercial():
             print(f"  ⚠️ Nenhuma task TTC. IDs amostra: {ids.unique()[:5].tolist()}")
             return pd.DataFrame()
 
-        df_ttc["_setor"] = df_ttc["setor"].astype(str).str.strip()
+        df_ttc["_setor"] = df_ttc["setor"].astype(str).str.strip().map(setor_hop)
         df_ttc["_pdv"]   = df_ttc["cod_pdv"].astype(str).str.strip()
         df_ttc["_ok"]    = df_ttc["status"].astype(str).str.strip().str.upper() == "VALID"
         mes_ref = _mes_ref_do_dado(df_ttc, "mes_ano")
@@ -2655,7 +2667,7 @@ def calcular_execucao_menu():
     print("📊 Calculando Execução Menu Cerveja (SPO Item 9)...")
 
     TASKS_MENU = {"03_03_01", "03_05_09", "03_05_10"}
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         df_tasks = ler_aba("tasks")
@@ -2670,7 +2682,7 @@ def calcular_execucao_menu():
         if df_menu.empty:
             return pd.DataFrame()
 
-        df_menu["_setor"] = df_menu["setor"].astype(str).str.strip()
+        df_menu["_setor"] = df_menu["setor"].astype(str).str.strip().map(setor_hop)
         df_menu["_ok"] = df_menu["status"].astype(str).str.strip().str.upper() == "VALID"
         df_menu["_mes"] = df_menu.get("mes_ano", pd.Series(dtype=str)).astype(str).str.strip()
         mes_ref = _mes_ref_do_dado(df_menu, "mes_ano")
@@ -2727,7 +2739,7 @@ def calcular_tarefas_cerveja():
 
     CLUSTER = "desenvolvimento de portfólio"
     CESTA   = "beer"
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         df_tasks = ler_aba("tasks")
@@ -2746,7 +2758,7 @@ def calcular_tarefas_cerveja():
             print(f"  ⚠️ Categoria únicos: {df_tasks['categoria'].astype(str).str.strip().unique()[:5].tolist()}")
             return pd.DataFrame()
 
-        df["_setor"]  = df["setor"].astype(str).str.strip()
+        df["_setor"]  = df["setor"].astype(str).str.strip().map(setor_hop)
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
         mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
@@ -2822,7 +2834,7 @@ def calcular_tarefas_nab():
 
     CLUSTER = "desenvolvimento de portfólio"
     CESTA   = "nab"
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         df_tasks = ler_aba("tasks")
@@ -2840,7 +2852,7 @@ def calcular_tarefas_nab():
             print(f"  ⚠️ Categoria únicos: {df_tasks['categoria'].astype(str).str.strip().unique()[:5].tolist()}")
             return pd.DataFrame()
 
-        df["_setor"]  = df["setor"].astype(str).str.strip()
+        df["_setor"]  = df["setor"].astype(str).str.strip().map(setor_hop)
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
         mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
@@ -2904,7 +2916,7 @@ def processar_score5(conteudo_bytes, mes_ref=None):
     import io as _io
     print("📂 Processando Score 5 / Task de Faturamento (SPO Item 12)...")
 
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     def _col(df, *nomes, pos=None):
         """Acha uma coluna por nome (case-insensitive, ignora espaços); fallback posicional."""
@@ -3204,7 +3216,7 @@ def calcular_tarefas_volume():
     print("📊 Calculando Tarefas de Volume (SPO Item 14)...")
 
     CLUSTER = "volume"
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         df_tasks = ler_aba("tasks")
@@ -3220,7 +3232,7 @@ def calcular_tarefas_volume():
             print(f"  ⚠️ Cluster únicos: {df_tasks['cluster_primario'].astype(str).str.strip().unique()[:8].tolist()}")
             return pd.DataFrame()
 
-        df["_setor"]  = df["setor"].astype(str).str.strip()
+        df["_setor"]  = df["setor"].astype(str).str.strip().map(setor_hop)
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
         mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
@@ -3282,7 +3294,7 @@ def calcular_tarefas_marketplace():
     print("📊 Calculando Tarefas de Marketplace (SPO Item 15)...")
 
     CLUSTER = "marketplace"
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         df_tasks = ler_aba("tasks")
@@ -3298,7 +3310,7 @@ def calcular_tarefas_marketplace():
             print(f"  ⚠️ Cluster únicos: {df_tasks['cluster_primario'].astype(str).str.strip().unique()[:8].tolist()}")
             return pd.DataFrame()
 
-        df["_setor"]  = df["setor"].astype(str).str.strip()
+        df["_setor"]  = df["setor"].astype(str).str.strip().map(setor_hop)
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
         mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
@@ -3352,7 +3364,7 @@ def calcular_tarefas_match():
     print("📊 Calculando Tarefas de Portfólio MATCH (SPO Item 16)...")
     CLUSTER = "desenvolvimento de portfólio"
     CESTA   = "match"
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
     try:
         df_tasks = ler_aba("tasks")
         if df_tasks.empty: return pd.DataFrame()
@@ -3377,7 +3389,7 @@ def calcular_tarefas_match():
             else:
                 print(f"  ⚠️ Todas categorias únicas no arquivo: {df_tasks['categoria'].astype(str).str.strip().unique()[:15].tolist()}")
                 return pd.DataFrame()
-        df["_setor"]  = df["setor"].astype(str).str.strip()
+        df["_setor"]  = df["setor"].astype(str).str.strip().map(setor_hop)
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
         mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
         resumo = []
@@ -3417,7 +3429,7 @@ def calcular_tarefas_cerveja_zero():
     print("📊 Calculando Tarefas de Portfólio Cerveja Zero (SPO Item 17)...")
     CLUSTER = "desenvolvimento de portfólio"
     CESTA   = "beer"
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
     try:
         df_tasks = ler_aba("tasks")
         if df_tasks.empty:
@@ -3438,7 +3450,7 @@ def calcular_tarefas_cerveja_zero():
             print(f"  ⚠️ Nenhuma task com 'zero'/'cero' no texto")
             return pd.DataFrame()
 
-        df["_setor"]  = df["setor"].astype(str).str.strip()
+        df["_setor"]  = df["setor"].astype(str).str.strip().map(setor_hop)
         df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
         mes_ref = _mes_ref_do_dado(df, "mes_ano")  # deriva do dado processado, não de date.today()
 
@@ -3523,7 +3535,7 @@ def calcular_todos_spo_tasks():
 
 def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_nome, meta, mes_ref=None):
     """Calcula tasks SPO com DataFrame já carregado — evita chamada extra ao Sheets."""
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     mask = df_tasks["cluster_primario"].astype(str).str.strip().str.lower() == cluster
     if cesta:
@@ -3550,7 +3562,7 @@ def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_n
     if df.empty:
         return
 
-    df["_setor"]  = df["setor"].astype(str).str.strip()
+    df["_setor"]  = df["setor"].astype(str).str.strip().map(setor_hop)
     df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
     # Deriva o mês do dado (campo mes_ano do BI), não da data atual
     mes_ref = mes_ref or _mes_ref_do_dado(df, "mes_ano", "data_visita")
@@ -3592,7 +3604,7 @@ def _calcular_sku_pdv_com_df(df_tasks, mes_ref=None):
     "Desenvolvimento de Portfólio" e "Marketplace". Realizado = Σ tasks VALID na
     operação. Tri = acumulado (soma meta/real dos 3 meses, via spo_metas).
     Gera spo_tasks_sku_pdv_resumo (por mês, com quebra por categoria) e _detalhe."""
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
     CLUSTERS = {"desenvolvimento de portfolio", "marketplace"}
     META = 60
     status_nome = "SPO - Tasks SKU/PDV TT"
@@ -3601,7 +3613,7 @@ def _calcular_sku_pdv_com_df(df_tasks, mes_ref=None):
     cat = df_tasks["descricao"].apply(_sem_acento).str.extract(_RE_SKU_PDV, expand=False)
     df = df_tasks[clus.isin(CLUSTERS) & cat.notna()].copy()
     df["_cat"] = cat[df.index].str.rstrip("s").str.upper()   # CERVEJAS → CERVEJA
-    df["_setor"] = df["setor"].astype(str).str.strip()
+    df["_setor"] = df["setor"].astype(str).str.strip().map(setor_hop)
     df = df[df["_setor"].isin(SETORES_LOCAL)]
     print(f"  [{status_nome}] {len(df)} tasks encontradas")
     if df.empty:
@@ -3663,7 +3675,7 @@ def processar_ln(conteudo_bytes, mes_ref=None):
     (STE, STE PG, COR, CORZ, SPT, MIC). Acumula por mês. Gera spo_tasks_ln_resumo/detalhe."""
     import io as _io
     print("📂 Processando +LN (SPO Item 27) — base dedicada...")
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
     META = 60
     try:
         try: df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
@@ -3672,7 +3684,7 @@ def processar_ln(conteudo_bytes, mes_ref=None):
 
         mes_ref = mes_ref or _mes_pt_para_ym(df.get("Mes/Ano", pd.Series(dtype=str))) or hoje_brasilia().strftime("%Y-%m")
 
-        df["setor"] = df["RN"].astype(str).str.strip()
+        df["setor"] = df["RN"].astype(str).str.strip().map(setor_hop)
         df = df[df["setor"].isin(SETORES_LOCAL)].copy()
         if df.empty:
             print("  ⚠️ +LN: nenhuma linha nos setores locais"); return
@@ -3731,14 +3743,14 @@ def processar_ln(conteudo_bytes, mes_ref=None):
 def _calcular_politica_com_df(df_tasks, mes_ref=None):
     """Wrapper de calcular_politica_comercial usando df já carregado."""
     TASKS_TTC = {"03_05_09", "03_03_01", "03_04_01", "03_05_10"}
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
     META = 60
 
     ids = df_tasks["id_task"].astype(str).str.strip()
     df_ttc = df_tasks[ids.isin(TASKS_TTC)].copy()
     if df_ttc.empty: return
 
-    df_ttc["_setor"] = df_ttc["setor"].astype(str).str.strip()
+    df_ttc["_setor"] = df_ttc["setor"].astype(str).str.strip().map(setor_hop)
     df_ttc["_pdv"]   = df_ttc["cod_pdv"].astype(str).str.strip()
     df_ttc["_ok"]    = df_ttc["status"].astype(str).str.strip().str.upper() == "VALID"
     mes_ref = mes_ref or _mes_ref_do_dado(df_ttc, "mes_ano")
@@ -3762,14 +3774,14 @@ def _calcular_politica_com_df(df_tasks, mes_ref=None):
 def _calcular_menu_com_df(df_tasks, mes_ref=None):
     """Wrapper de calcular_execucao_menu usando df já carregado."""
     TASKS_MENU = {"03_03_01", "03_05_09", "03_05_10"}
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
     META = 46
 
     ids = df_tasks["id_task"].astype(str).str.strip()
     df_menu = df_tasks[ids.isin(TASKS_MENU)].copy()
     if df_menu.empty: return
 
-    df_menu["_setor"] = df_menu["setor"].astype(str).str.strip()
+    df_menu["_setor"] = df_menu["setor"].astype(str).str.strip().map(setor_hop)
     df_menu["_ok"]    = df_menu["status"].astype(str).str.strip().str.upper() == "VALID"
     mes_ref = mes_ref or _mes_ref_do_dado(df_menu, "mes_ano")
 
@@ -3807,7 +3819,7 @@ def processar_pedido_alone(conteudo_bytes, mes_ref=None):
     """
     import io as _io
     print("📂 Processando PDV com Compra Independente (SPO Item 19)...")
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
     try:
         try:
             df = pd.read_excel(_io.BytesIO(conteudo_bytes), sheet_name="Export", dtype=str)
@@ -3936,7 +3948,7 @@ def processar_rgb(conteudo_bytes, mes_ref=None):
     """
     import io as _io
     print("📂 Processando +RGB (SPO Item 20)...")
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         try:
@@ -3947,7 +3959,7 @@ def processar_rgb(conteudo_bytes, mes_ref=None):
         df.columns = [c.strip() for c in df.columns]
 
         # Filtrar só setores locais (coluna RN)
-        df["setor"] = df["RN"].astype(str).str.strip()
+        df["setor"] = df["RN"].astype(str).str.strip().map(setor_hop)
         df = df[df["setor"].isin(SETORES_LOCAL)].copy()
         print(f"  PDVs nos setores locais: {len(df)}")
 
@@ -4064,7 +4076,7 @@ def processar_cupons_digitais(conteudo_bytes, mes_ref=None):
     """
     import io as _io
     print("📂 Processando Cupons Digitais Score 5 (SPO Item 21)...")
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         try:
@@ -4082,7 +4094,7 @@ def processar_cupons_digitais(conteudo_bytes, mes_ref=None):
         print(f"  Mês vigente: {mes_vigente}")
 
         # Filtrar só setores locais
-        df["setor"] = df["RN"].astype(str).str.strip()
+        df["setor"] = df["RN"].astype(str).str.strip().map(setor_hop)
         df["gv"]    = df["GV"].astype(str).str.strip()
         df = df[df["setor"].isin(SETORES_LOCAL)].copy()
         df["_cupons"]   = pd.to_numeric(df["Cupons"], errors="coerce").fillna(0)
@@ -4413,7 +4425,7 @@ def processar_portfolio_ideal(conteudo_bytes, mes_ref=None):
     """
     import io as _io
     print("📂 Processando Portfólio Ideal Score 5 (SPO Item 24)...")
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         try:
@@ -4434,7 +4446,7 @@ def processar_portfolio_ideal(conteudo_bytes, mes_ref=None):
                 new_cols.append(cs)
         df.columns = new_cols
 
-        df["setor"] = df["RN"].astype(str).str.strip()
+        df["setor"] = df["RN"].astype(str).str.strip().map(setor_hop)
         df["gv"]    = df["GV"].astype(str).str.strip()
         df = df[df["setor"].isin(SETORES_LOCAL)].copy()
         print(f"  PDVs nos setores locais: {len(df)}")
@@ -4549,7 +4561,7 @@ def processar_atendimento_produtivo(conteudo_bytes, mes_ref=None):
     """
     import io as _io
     print("📂 Processando Atendimento Produtivo (SPO Item 5)...")
-    SETORES_LOCAL = {"101","102","103","104","105","106","301","302","303","304","305"}
+    SETORES_LOCAL = SETORES_VALIDOS
 
     try:
         try:
