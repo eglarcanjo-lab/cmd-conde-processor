@@ -2081,7 +2081,9 @@ def calcular_rv_completa(mes_ref=None):
 
     # Calcula por setor
     resultados = []
-    todos_setores = list(SEGMENTO_OFF | SEGMENTO_ON)
+    # Códigos antigos (301–305) já foram somados nos novos (107–111) pelo de-para — não
+    # gera linha zerada para eles.
+    todos_setores = [s for s in (SEGMENTO_OFF | SEGMENTO_ON) if s not in DE_PARA_SETOR]
 
     for setor in todos_setores:
         segmento = "OFF" if setor in SEGMENTO_OFF else "ON"
