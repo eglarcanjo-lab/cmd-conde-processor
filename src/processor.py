@@ -688,6 +688,10 @@ def processar_cora(conteudo_bytes):
 #     NF de um mês não coberto (ex.: NF 30/09 entregue 01/10 num arquivo só de outubro) é
 #     ignorada — senão o import apagaria o mês anterior inteiro (as tabelas substituem por mês).
 
+# Virada de fonte: até set/2026 os dados são do Promax (fechamento de setembro = Promax);
+# o CORA só grava de out/2026 em diante — nunca sobrescreve mês anterior.
+CORA_INICIO = "2026-10"
+
 MOTIVOS_DEVOLUCAO_PADRAO = {
     "37": "PDV FECHADO", "45": "TEMPO INSUFICIENTE", "33": "NAO FEZ PEDIDO", "48": "PDV FECHADO APOS",
     "38": "SEM DINHEIRO", "39": "CLIENTE CANCELOU", "71": "SEM DINHEIRO/CHEQUE", "47": "DIFICIL ACESSO",
@@ -745,8 +749,9 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     df["_data"] = d_nf.fillna(d_ent)
     df["_mes"] = df["_data"].dt.strftime("%Y-%m")
 
-    # Proteção de mês: só meses COBERTOS pelo arquivo (entregas dentro do mês).
-    cobertos = set(d_ent.dt.strftime("%Y-%m").dropna())
+    # Proteção de mês: só meses COBERTOS pelo arquivo (entregas dentro do mês) e a partir da
+    # VIRADA para o CORA (CORA_INICIO). Meses anteriores são do Promax e ficam intocados.
+    cobertos = {m for m in d_ent.dt.strftime("%Y-%m").dropna() if m >= CORA_INICIO}
     fora = df["_mes"].notna() & ~df["_mes"].isin(cobertos)
     if fora.any():
         print(f"  ⚠️ {int(fora.sum())} linhas com NF em mês não coberto pelo arquivo "
@@ -754,6 +759,13 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     df = df[~fora & df["_mes"].notna()].copy()
     meses = sorted(df["_mes"].unique())
     print(f"  📅 Meses cobertos e gravados: {meses}")
+    if df.empty:
+        # Nada a gravar (ex.: arquivo só de mês do Promax). NÃO roda pedidos/devoluções —
+        # senão os snapshots (cobertura, mix…) seriam refeitos vazios. Buffer/Deck = estado atual.
+        print("  ⏭️ Nenhum mês do CORA a gravar (anteriores à virada ficam com o Promax) — só Buffer + Deck.")
+        d_bd = processar_cora(conteudo_bytes)
+        return {"aviso": f"nenhum mês a partir de {CORA_INICIO} no arquivo — vendas/devoluções não alteradas",
+                "buffer_deck": f"buffer {d_bd['num_pedido'].nunique() if len(d_bd) else 0} pedidos"}
 
     CANCEL = {"CANCELADO", "FATURADO_NF_DEVOLVIDA", "FATURADO_NF_CANCELADA"}
     df["_venda"] = ((df["_op"] == "1") & (df["_atend_item"] == "ATENDIDO") &
