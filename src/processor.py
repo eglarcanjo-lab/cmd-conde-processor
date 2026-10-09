@@ -1417,6 +1417,20 @@ def processar_devolucoes_relatorio(conteudo_bytes, mes_ref=None):
     return out
 
 
+def _txt(v):
+    """Texto limpo: vazio p/ None/NaN e p/ os textos 'nan'/'none'/'null' (sobra de NaN salvo
+    como texto — antes travava o nome como "nan" p/ sempre na produtos_base)."""
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    t = str(v).strip()
+    return "" if t.lower() in ("nan", "none", "null", "nat") else t
+
+
 def _registrar_sem_categoria(df, mapa_produtos):
     """Registra produtos que apareceram nos pedidos mas não têm categoria."""
     # Normaliza código: remove zeros à esquerda para bater com produtos_base
@@ -1431,9 +1445,9 @@ def _registrar_sem_categoria(df, mapa_produtos):
                 cod = str(row.get("cod","")).strip().lstrip("0") or "0"
                 if cod and cod != "0":
                     mapa_base[cod] = {
-                        "nome": str(row.get("nome","")).strip(),
-                        "categorias": str(row.get("categorias","")).strip(),
-                        "atualizado_em": str(row.get("atualizado_em","")).strip(),
+                        "nome": _txt(row.get("nome", "")),
+                        "categorias": _txt(row.get("categorias", "")),
+                        "atualizado_em": _txt(row.get("atualizado_em", "")),
                     }
     except Exception:
         mapa_base = {}
@@ -1445,7 +1459,7 @@ def _registrar_sem_categoria(df, mapa_produtos):
     linhas_base = []
     for _, row in todos_prods.iterrows():
         cod = str(row["cod"]).strip()
-        nome_pedido = str(row["nome_pedido"]).strip()
+        nome_pedido = _txt(row["nome_pedido"])
         existente = mapa_base.get(cod, {})
 
         # Preserva nome da base 0111 se já existe, senão usa nome do pedido
