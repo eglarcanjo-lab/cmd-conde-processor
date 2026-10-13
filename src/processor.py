@@ -153,6 +153,18 @@ def processar_clientes(conteudo_bytes):
 
     hoje_idx = dia_semana_hoje()
 
+    # Bairro / Categoria do PDV (p/ o relatório "Base de PDVs × dia de visita"): acha a
+    # coluna pelo nome (o layout do Promax varia) — se não existir, fica vazio.
+    def _col(*chaves):
+        for c in df.columns:
+            u = c.upper()
+            if any(u == k or u.startswith(k + " ") for k in chaves):
+                return c
+        return None
+    col_bairro = _col("BAIRRO")
+    col_categoria = _col("CATEGORIA")
+    print(f"  → bairro: {col_bairro or '—'} · categoria: {col_categoria or '—'}")
+
     resultados = []
     for _, row in df.iterrows():
         dia_raw = row.get("Dia de Visita do VDE", "")
@@ -187,6 +199,8 @@ def processar_clientes(conteudo_bytes):
             "compra_media": str(row.get("Compra Média", "")).strip(),
             "acumulado_vendas": str(row.get("Acumulado de Vendas", "")).strip(),
             "data_prox_visita": str(row.get("Data da Prox Visita VDE", "")).strip(),
+            "bairro": _txt(row.get(col_bairro, "")) if col_bairro else "",
+            "categoria": _txt(row.get(col_categoria, "")) if col_categoria else "",
         })
 
     df_base = pd.DataFrame(resultados)
