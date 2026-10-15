@@ -452,6 +452,86 @@ def processar_tasks(conteudo_bytes):
     return df_tasks
 
 
+def processar_missoes(conteudo_bytes):
+    """Relatório de MISSÕES do BI (campanha, ex.: "MANDA BALA NAS VENDAS") — xlsx com 2
+    linhas de filtro antes do cabeçalho: Operação | UNB | GV | RN | PDV | Nome PDV |
+    Data Próxima Visita | Campanha | Missão | Data Conclusão | Validacao (SIM/NÃO).
+    Gera a aba `missoes`. Arquivo FILTRADO (só alguns RNs) atualiza só esses setores."""
+    import re as _re
+    print("📂 Processando missões...")
+    try:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), engine="openpyxl", dtype=str, skiprows=2)
+    except Exception:
+        df = pd.read_excel(io.BytesIO(conteudo_bytes), dtype=str, skiprows=2)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    def col(*nomes):
+        norm = {c.upper().replace("Ã", "A").replace("Ç", "C"): c for c in df.columns}
+        for n in nomes:
+            c = norm.get(n.upper())
+            if c: return c
+        raise ValueError(f"Coluna não encontrada: {nomes[0]}. Disponíveis: {list(df.columns)}")
+    c_rn, c_pdv, c_nome = col("RN"), col("PDV"), col("NOME PDV")
+    c_prox, c_camp, c_miss = col("DATA PROXIMA VISITA", "DATA PRÓXIMA VISITA"), col("CAMPANHA"), col("MISSAO", "MISSÃO")
+    c_conc, c_val, c_gv = col("DATA CONCLUSAO", "DATA CONCLUSÃO"), col("VALIDACAO", "VALIDAÇÃO"), col("GV")
+
+    def data_br(v):
+        t = _txt(v)
+        if not t: return ""
+        try:
+            if _re.fullmatch(r"\d+(\.\d+)?", t):   # serial do Excel
+                return (date(1899, 12, 30) + pd.Timedelta(days=int(float(t)))).strftime("%d/%m/%Y")
+            return pd.to_datetime(t, dayfirst=not _re.match(r"\d{4}-", t)).strftime("%d/%m/%Y")
+        except Exception:
+            return t
+
+    def limpa_missao(v):
+        t = _txt(v)
+        t = _re.sub(r"^[^0-9A-Za-zÀ-ÿ]+", "", t)                       # emojis do começo
+        t = _re.sub(r"\s*Valendo mais pontos!?\s*$", "", t, flags=_re.I)  # sufixo igual em todas
+        return t.strip()
+
+    df["_setor"] = df[c_rn].apply(normalizar_setor)
+    df = df[df["_setor"].isin(SETORES_VALIDOS)].copy()
+    hoje = hoje_brasilia()
+    out = pd.DataFrame({
+        "setor":          df["_setor"],
+        "gv":             df[c_gv].map(_txt),
+        "cod_pdv":        df[c_pdv].map(_txt).str.replace(r"\.0$", "", regex=True).str.lstrip("0"),
+        "nome_pdv":       df[c_nome].map(_txt).str.replace(r"^\d+\s*-\s*", "", regex=True),
+        "proxima_visita": df[c_prox].map(data_br),
+        "campanha":       df[c_camp].map(_txt),
+        "missao":         df[c_miss].map(limpa_missao),
+        "concluida_em":   df[c_conc].map(data_br),
+        "validada":       df[c_val].map(_txt).str.upper().map(lambda s: "SIM" if s.startswith("S") else "NÃO"),
+        "mes_referencia": f"{hoje.year}-{hoje.month:02d}",
+    })
+    out = out[out["missao"] != ""]
+
+    # Mesmo cuidado das Tasks: arquivo parcial não apaga os outros setores
+    setores_novos = sorted(set(out["setor"])) if not out.empty else []
+    mantidos = []
+    try:
+        antigo = ler_aba("missoes")
+        if not antigo.empty and "setor" in antigo.columns and setores_novos:
+            antigo["setor"] = antigo["setor"].astype(str).str.strip().map(setor_hop)
+            fora = antigo[~antigo["setor"].isin(setores_novos)]
+            if not fora.empty:
+                mantidos = sorted(set(fora["setor"]))
+                out = pd.concat([out, fora[[c for c in out.columns if c in fora.columns]]], ignore_index=True)
+    except Exception as e:
+        print(f"  ⚠️ missões anteriores não lidas (segue só com o arquivo): {e}")
+
+    sobrescrever_aba("missoes", out)
+    ok = int((out["validada"] == "SIM").sum())
+    msg = f"{len(out)} missões · {ok} validadas · {out['cod_pdv'].nunique()} PDVs · setores: {', '.join(setores_novos) or '—'}"
+    if mantidos:
+        msg += f" · ⚠️ arquivo parcial — mantidos da importação anterior: {', '.join(mantidos)}"
+    atualizar_status_arquivo("Missões (BI)", "⚠️ Parcial" if mantidos else "✅ OK", msg)
+    print(f"  {msg}")
+    return out
+
+
 def processar_produtos_base(conteudo_bytes):
     """
     Processa o arquivo 0111 (base de produtos do sistema).

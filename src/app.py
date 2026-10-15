@@ -6,7 +6,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_cora, processar_coleta, processar_pedidos_historico, processar_rota_efetiva, processar_ln, processar_comodatos, processar_cora_completo
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_cora, processar_coleta, processar_pedidos_historico, processar_rota_efetiva, processar_ln, processar_comodatos, processar_cora_completo, processar_missoes
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -207,6 +207,14 @@ def upload_ambos():
         except Exception as e:
             traceback.print_exc()
             resultados["tasks"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "missoes" in arquivos:
+        try:
+            processar_missoes(arquivos["missoes"].read())
+            resultados["missoes"] = "✅ Missões processadas"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["missoes"] = f"❌ Erro: {str(e)[:100]}"
 
     _rodar_spo(arquivos, "spo_score5",          processar_score5,                resultados, _mes_ref, msg="Score 5 processado")
     _rodar_spo(arquivos, "spo_rotina_mais",     processar_rotina_mais,           resultados, _mes_ref, msg="Rotina+ processado")
@@ -842,13 +850,15 @@ ITENS_BI = {
 ORDEM = ["clientes", "produtos_base", "faturamento_mktp", "pontos_bees",
          "spo_visitacao_gv", "spo_coaching", "spo_dto", "spo_promo", "spo_score5",
          "spo_alone", "spo_rgb", "spo_cupons", "spo_loja_ideal", "spo_scanntech",
-         "spo_portfolio_ideal", "spo_ap", "tasks", "inadimplencia", "devolucoes",
+         "spo_portfolio_ideal", "spo_ap", "tasks", "missoes", "inadimplencia", "devolucoes",
          "pedidos", "cora", "comodatos", "grade"]
 
 
 def detectar_tipo(nome):
     base = str(nome).rsplit("/", 1)[-1]
     low = base.lower()
+    if "miss" in low:          # "missoes.xlsx" / "Missões ..." (antes de "task")
+        return "missoes"
     if "task" in low:
         return "tasks"
     if "ponto" in low or "bees" in low:
@@ -942,6 +952,8 @@ def upload_zip():
                 processar_ln(b, mes_ref=mes_ref)
             elif campo == "spo_ap":
                 processar_atendimento_produtivo(b, mes_ref=mes_ref); precisa_rv = True
+            elif campo == "missoes":
+                processar_missoes(b)
             elif campo == "tasks":
                 processar_tasks(b)
                 try:
