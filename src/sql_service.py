@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # sql_service — versão PostgreSQL das funções de dados do processador, com a MESMA
 # assinatura de sheets_service (ler_aba / sobrescrever_aba / atualizar_status_arquivo).
-# Ativado por DATA_BACKEND=sql (ver fim de sheets_service.py). Padrão = Sheets.
+# Camada de dados do processador (sheets_service.py só reexporta daqui). Sempre SQL.
 #
 #   • ler_aba: SELECT * → DataFrame. Colunas 100% numéricas viram número (mimetiza o
 #     UNFORMATTED do Sheets); colunas de código (setor, cod_*, cpf…) ficam como texto.

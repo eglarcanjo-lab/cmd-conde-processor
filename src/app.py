@@ -33,32 +33,14 @@ def verificar_token(req):
     return token == PROCESSOR_TOKEN
 
 
-def _eh_quota_429(e):
-    """True SÓ se for realmente quota 429 do gspread (instância APIError com status 429).
-    Não confia em string solta ('429'/'quota' no texto) — isso mascarava erros de SQL
-    como se fossem do Google Sheets."""
-    try:
-        import gspread
-        return (isinstance(e, gspread.exceptions.APIError)
-                and getattr(getattr(e, "response", None), "status_code", None) == 429)
-    except Exception:
-        return False
-
-
 @app.errorhandler(Exception)
 def _handle_erro(e):
-    """Qualquer erro não tratado: quota do Sheets vira mensagem clara (429);
-    o resto vira 500 com a mensagem encurtada — nunca HTML cru pro Node."""
+    """Qualquer erro não tratado vira 500 com a mensagem encurtada — nunca HTML cru pro Node."""
     # Erros HTTP normais (404, 405, etc.) passam direto — não viram 500.
     from werkzeug.exceptions import HTTPException
     if isinstance(e, HTTPException):
         return e
     traceback.print_exc()
-    if _eh_quota_429(e):
-        return jsonify({
-            "error": "Quota do Google Sheets excedida. Aguarde ~1 minuto e "
-                     "importe menos relatórios por vez."
-        }), 429
     # Mostra o erro REAL (tipo + mensagem) — nada de esconder atrás de "Google Sheets".
     return jsonify({"error": f"[{type(e).__name__}] {str(e)[:220]}".strip() or "Erro interno no processador."}), 500
 
@@ -66,7 +48,7 @@ def _handle_erro(e):
 @app.route("/health")
 def health():
     import os
-    backend = "sql" if os.environ.get("DATA_BACKEND", "sheets").strip().lower() == "sql" else "sheets"
+    backend = "sql"  # sempre SQL (Google Sheets removido em out/2026)
     # Prova qual implementação REALMENTE está ligada (pega bug de import order):
     impls = {}
     try:
@@ -76,22 +58,6 @@ def health():
     except Exception as e:
         impls["erro"] = str(e)[:100]
     return jsonify({"status": "ok", "service": "cmd-conde-processor", "data_backend": backend, "impls": impls})
-
-
-@app.route("/api/migrar/sheets-para-sql", methods=["POST"])
-def migrar_sheets_sql():
-    """Carga inicial Sheets → Postgres (Supabase). Protegido por token. Idempotente:
-    pode rodar de novo (recria/recarrega). Requer a env DATABASE_URL no processador."""
-    if not verificar_token(request):
-        return jsonify({"error": "Token inválido."}), 401
-    try:
-        from etl import migrar_tudo  # import tardio: só carrega psycopg2 quando chamado
-        relatorio = migrar_tudo()
-        ok = sum(1 for v in relatorio.values() if str(v).startswith("✅"))
-        return jsonify({"success": True, "abas_ok": ok, "relatorio": relatorio})
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)[:300]}), 500
 
 
 @app.route("/api/processar/clientes", methods=["POST"])
