@@ -1808,8 +1808,29 @@ def processar_tasks(conteudo_bytes):
         })
     
     df_tasks = pd.DataFrame(resultado)
+
+    # Proteção (v3.85.7): arquivo do BI FILTRADO (só alguns RNs) apagava as tasks de todos
+    # os outros setores (caso real: só 109/110 → o 108 ficou sem nenhuma task). Agora o
+    # arquivo atualiza só os setores que vieram nele; os demais ficam como estavam.
+    setores_novos = sorted(set(df_tasks["setor"])) if not df_tasks.empty else []
+    mantidos = []
+    try:
+        antigo = ler_aba("tasks")
+        if not antigo.empty and "setor" in antigo.columns and setores_novos:
+            antigo["setor"] = antigo["setor"].astype(str).str.strip().map(setor_hop)
+            fora = antigo[~antigo["setor"].isin(setores_novos)]
+            if not fora.empty:
+                mantidos = sorted(set(fora["setor"]))
+                df_tasks = pd.concat([df_tasks, fora[[c for c in df_tasks.columns if c in fora.columns]]], ignore_index=True)
+    except Exception as e:
+        print(f"  ⚠️ tasks anteriores não lidas (segue só com o arquivo): {e}")
+
     sobrescrever_aba("tasks", df_tasks)
-    atualizar_status_arquivo("Tasks (BI)", "✅ OK", f"{len(df_tasks)} tasks processadas")
+    msg = f"{len(df_tasks)} tasks · setores no arquivo: {', '.join(setores_novos) or '—'}"
+    if mantidos:
+        msg += f" · ⚠️ arquivo parcial — mantidos da importação anterior: {', '.join(mantidos)}"
+    atualizar_status_arquivo("Tasks (BI)", "⚠️ Parcial" if mantidos else "✅ OK", msg)
+    print(f"  {msg}")
     print(f"  ✅ Tasks processadas: {len(df_tasks)}")
     return df_tasks
 
