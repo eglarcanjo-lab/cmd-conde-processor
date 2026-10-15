@@ -285,6 +285,14 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     df["_categorias"] = cod_norm.map(mapa_produtos)
     df["_categorias"] = df["_categorias"].apply(lambda x: x if isinstance(x, list) else [])
     df["_categoria"]  = df["_categorias"].apply(lambda x: x[0] if x else None)
+    # Nome vazio (CORA sem "Desc. produto") NÃO pode virar o texto "nan": limpa e, se
+    # faltar, completa com o nome da base de produtos.
+    df["Nome Prod."] = df["Nome Prod."].map(_txt)
+    if (df["Nome Prod."] == "").any() and not df_prods_base.empty and "nome" in df_prods_base.columns:
+        _nomes_base = {str(c).strip().replace(".0", "").lstrip("0"): _txt(n)
+                       for c, n in zip(df_prods_base["cod"], df_prods_base["nome"]) if _txt(n)}
+        _v = df["Nome Prod."] == ""
+        df.loc[_v, "Nome Prod."] = cod_norm[_v].map(lambda c: _nomes_base.get(c, "")).values
     del cod_norm
     gc.collect()
 
@@ -844,6 +852,25 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     # ── 1) PEDIDOS → formato Promax 03014701 → processar_pedidos (todas as análises) ──
     dd = lambda s: s.dt.strftime("%d/%m/%Y").fillna("")
     fmt = lambda v: v.round(3).map(lambda x: f"{x:.3f}".replace(".", ","))
+    # Alguns itens do CORA vêm com "Desc. produto" VAZIO → virava "nan" em todo lugar
+    # (pedido_bees_itens, vendas, ruptura…). Completa pelo cadastro (produtos_full → base).
+    nome_prod = t("Desc. produto").loc[df.index].map(_txt)
+    if (nome_prod == "").any():
+        nomes = {}
+        for aba in ("produtos_base", "produtos_full"):
+            try:
+                pb = ler_aba(aba)
+                for _, r in pb.iterrows():
+                    c = str(r.get("cod", "")).strip().replace(".0", "").lstrip("0")
+                    n = _txt(r.get("nome", ""))
+                    if c and n:
+                        nomes[c] = n
+            except Exception as e:
+                print(f"  ⚠️ {aba} não lida p/ nomes: {e}")
+        cods = t("Cód. produto").loc[df.index].astype(str).str.strip().str.replace(r"\.0$", "", regex=True).str.lstrip("0")
+        vazio = nome_prod == ""
+        nome_prod = nome_prod.where(~vazio, cods.map(lambda c: nomes.get(c, "")))
+        print(f"  → {int(vazio.sum())} itens sem descrição no CORA; {int((vazio & (nome_prod != '')).sum())} completados pelo cadastro")
     ped = pd.DataFrame({
         "Setor":              df["_setor"],
         "Nome Setor":         t("Desc. setor").loc[df.index],
@@ -851,7 +878,7 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         "Cliente":            t("Cód. cliente").loc[df.index],
         "Nome Cliente":       t("Nome cliente").loc[df.index],
         "Cod. Prod.":         t("Cód. produto").loc[df.index],
-        "Nome Prod.":         t("Desc. produto").loc[df.index],
+        "Nome Prod.":         nome_prod,
         "Volume Marcacao":    fmt(df["_hl"]),
         "Volume Entrega":     fmt(df["_hl"].where(df["_venda"], 0.0)),
         "Motivo":             df["_desc_motivo"].where(df["_devolvido"],
