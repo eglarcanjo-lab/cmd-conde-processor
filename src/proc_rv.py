@@ -190,6 +190,13 @@ def processar_faturamento_mktp(conteudo_bytes, mes_ref=None):
         .rename(columns={"_setor": "setor", "_total_venda": "faturamento_mktp_real"})
     )
     _mes = str(mes_ref).strip() if mes_ref else date.today().strftime("%Y-%m")
+    # De out/2026 em diante o Faturamento Mktp vem do CORA. O 030509 não tem data (o mês vem
+    # do "mês de referência" da tela) — sem esta trava, importar esquecendo o mês apagaria o
+    # mês corrente do CORA. Só aceita meses ANTERIORES à virada.
+    _VIRADA_CORA = "2026-10"
+    if _mes >= _VIRADA_CORA:
+        raise ValueError(f"030509 é só para meses do Promax (antes de {_VIRADA_CORA}); o mês {_mes} vem do CORA. "
+                         "Escolha o mês de referência (ex.: 2026-09) antes de importar.")
     resultado["mes_referencia"] = _mes
     resultado["faturamento_mktp_real"] = resultado["faturamento_mktp_real"].round(2)
 
@@ -347,26 +354,36 @@ def calcular_rv_completa(mes_ref=None):
         if cat == "PO_TOTAL":
             po_total_map[setor] = meta
 
+    # Setor sempre pelo de-para (setor_hop: 301–305 → 107–111), igual às metas acima. Antes
+    # pontos/Mktp/AP usavam o código cru: no recálculo de set/26 (gravado como 301–305 no
+    # Promax) os RNs 107–111 ficavam com Mktp/pontos/AP ZERADOS.
     # Mapa de pontos Bees (só do mês-alvo)
     pontos_map = {}
     for _, row in df_pontos.iterrows():
         if not _do_mes(row):
             continue
-        pontos_map[str(row.get("setor","")).strip()] = float(row.get("pontos_real", 0) or 0)
+        s = setor_hop(row.get("setor", ""))
+        v = float(row.get("pontos_real", 0) or 0)
+        if v or s not in pontos_map:          # código antigo e novo no mesmo mês: fica o não-zerado
+            pontos_map[s] = v
 
-    # Mapa de faturamento Mktp (só do mês-alvo)
+    # Mapa de faturamento Mktp (só do mês-alvo) — soma (antigo + novo, se houver os dois)
     mktp_map = {}
     for _, row in df_mktp.iterrows():
         if not _do_mes(row):
             continue
-        mktp_map[str(row.get("setor","")).strip()] = float(row.get("faturamento_mktp_real", 0) or 0)
+        s = setor_hop(row.get("setor", ""))
+        mktp_map[s] = mktp_map.get(s, 0.0) + float(row.get("faturamento_mktp_real", 0) or 0)
 
     # Mapa AP (atendimento produtivo — só do mês-alvo)
     ap_map = {}
     for _, row in df_ap.iterrows():
         if not _do_mes(row):
             continue
-        ap_map[str(row.get("setor","")).strip()] = str(row.get("ap_ok","NOK")).strip().upper()
+        s = setor_hop(row.get("setor", ""))
+        v = str(row.get("ap_ok", "NOK")).strip().upper()
+        if v == "OK" or s not in ap_map:
+            ap_map[s] = v
 
     # Volume real por setor/categoria (gerado por processar_pedidos → rv_volume)
     df_vol = ler_aba("rv_volume")

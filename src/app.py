@@ -334,6 +334,14 @@ def upload_ambos():
             gc.collect()
             calcular_rv_completa()
             resultados["rv_recalculada"] = "✅ RV recalculada automaticamente"
+            # Import de mês ANTERIOR (ex.: 030509 de set/26 com "mês de referência"): recalcula
+            # também esse mês — antes só o mês corrente era refeito. Mês com RV FECHADA é pulado
+            # pelo próprio cálculo (reabrir no RV Simulador antes, se precisar).
+            from datetime import date as _date
+            _mes_atual = _date.today().strftime("%Y-%m")
+            if _mes_ref and str(_mes_ref) != _mes_atual and {"faturamento_mktp", "pontos_bees", "spo_ap"} & set(arquivos.keys()):
+                calcular_rv_completa(mes_ref=str(_mes_ref))
+                resultados["rv_recalculada"] = f"✅ RV recalculada (mês atual e {_mes_ref})"
         except Exception as e:
             traceback.print_exc()
             resultados["rv_recalculada"] = f"❌ Erro ao recalcular RV: {str(e)[:120]}"
