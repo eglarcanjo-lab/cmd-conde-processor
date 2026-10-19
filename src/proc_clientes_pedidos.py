@@ -225,12 +225,13 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
         sobrescrever_aba("pedido_produtos", prod_ped)
         print(f"  🧾 pedido_produtos: {prod_ped['num_pedido'].nunique()} pedidos · {len(prod_ped)} linhas")
 
-        # ── Detalhe de pedidos do SKU dos Verdes (33857) p/ export Excel ──────
-        # Linha a linha: nº pedido, NF, data, PDV, produto, volume. Acumula por mês.
+        # ── Detalhe de pedidos dos SKUs dos Verdes p/ export Excel e mês por dia ──────
+        # Stella Pure Gold 600: 33857 (retornável) + 38172 (one way). Linha a linha: nº pedido,
+        # NF, data, PDV, produto, volume. Acumula por mês.
         try:
-            _SKU_V = "33857"
+            _SKUS_V = {"33857", "38172"}
             _codn = df["Cod. Prod."].astype(str).str.strip().str.lstrip("0")
-            dv = df[_codn == _SKU_V]
+            dv = df[_codn.isin(_SKUS_V)]
             if not dv.empty:
                 _dt = pd.to_datetime(dv["Data"].astype(str).str.strip(), format="%d/%m/%Y", errors="coerce")
                 det_v = pd.DataFrame({
@@ -240,7 +241,7 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
                     "setor":        dv["_setor"].values,
                     "cod_pdv":      dv["_cod_pdv"].values,
                     "nome_pdv":     (dv["Nome Cliente"].astype(str).str.strip().values if "Nome Cliente" in dv.columns else ""),
-                    "cod_produto":  _SKU_V,
+                    "cod_produto":  _codn[dv.index].values,
                     "nome_produto": dv["Nome Prod."].astype(str).str.strip().values,
                     "volume_hl":    dv["_volume"].round(3).values,
                     "mes_referencia": _dt.dt.strftime("%Y-%m").values,
@@ -249,7 +250,7 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
                 # linhas zeradas/devolução que inflavam a contagem de PDVs no export.
                 det_v = det_v[det_v["mes_referencia"].notna() & (det_v["mes_referencia"] != "") & (det_v["volume_hl"] > 0)]
                 sobrescrever_por_mes("verdes_pedidos", det_v, "mes_referencia")
-                print(f"  🌿 verdes_pedidos (SKU {_SKU_V}): {len(det_v)} linhas")
+                print(f"  🌿 verdes_pedidos (SKUs {sorted(_SKUS_V)}): {len(det_v)} linhas")
         except Exception as _ev:
             print(f"  ⚠️ verdes_pedidos: {_ev}")
 
