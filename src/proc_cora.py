@@ -167,6 +167,33 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     if len(oc):
         res["motivos_novos"] = f"⚠️ {len(oc)} código(s) de motivo sem cadastro: {', '.join(oc['cod'])}"
 
+    # ── 1b) PAINEL DO DIA (igual à "Visão geral" do CORA) → cora_dia ─────────────────
+    # TODOS os setores (inclui 997/995 = PDVs sem RN, que o painel do CORA conta) e TODAS as
+    # situações do item (ATENDIDO, FALTA, ANULADO, AGUARDANDO_*), por dia (data = NF ou
+    # entrega − 1, a mesma da HOP) × setor × PDV × produto. De 7 dias atrás em diante.
+    # Volume Diário usa p/ os cards Dia/Operação/Atendidos/Ag./Faltas e as faltas por PDV/produto.
+    try:
+        ini = pd.Timestamp(hoje_brasilia()) - pd.Timedelta(days=7)   # 7 dias p/ trás + futuros (pedidos já marcados)
+        cd = df[df["_data"] >= ini]
+        cod_p = t("Cód. produto").loc[cd.index].str.replace(r"\.0$", "", regex=True).str.lstrip("0")
+        dia_df = pd.DataFrame({
+            "data": cd["_data"].dt.strftime("%d/%m/%Y").values,
+            "setor": cd["_setor"].values,
+            "cod_pdv": t("Cód. cliente").loc[cd.index].str.lstrip("0").values,
+            "nome_pdv": t("Nome cliente").loc[cd.index].values,
+            "cod_produto": cod_p.values,
+            "nome_produto": t("Desc. produto").loc[cd.index].map(_txt).values,
+            "situacao": cd["_atend_item"].replace("", "SEM_SITUACAO").values,
+            "volume_hl": cd["_hl"].values,
+        })
+        dia_df = (dia_df.groupby(["data", "setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "situacao"], as_index=False)
+                  ["volume_hl"].sum())
+        dia_df["volume_hl"] = dia_df["volume_hl"].round(3)
+        sobrescrever_aba("cora_dia", dia_df)
+        res["cora_dia"] = f"{len(dia_df)} linhas (painel do dia, {dia_df['data'].nunique()} dias)"
+    except Exception as e:
+        print(f"  ⚠️ cora_dia: {e}")
+
     # ── 1) PEDIDOS → formato Promax 03014701 → processar_pedidos (todas as análises) ──
     dd = lambda s: s.dt.strftime("%d/%m/%Y").fillna("")
     fmt = lambda v: v.round(3).map(lambda x: f"{x:.3f}".replace(".", ","))
