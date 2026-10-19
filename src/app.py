@@ -6,7 +6,7 @@ import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
-from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_cora, processar_coleta, processar_pedidos_historico, processar_rota_efetiva, processar_ln, processar_comodatos, processar_cora_completo, processar_missoes
+from processor import processar_clientes, processar_pedidos, processar_inadimplencia, processar_tasks, processar_produtos_base, processar_faturamento_mktp, processar_pontos_bees, calcular_rv_completa, processar_visitacao_gv, processar_rota_coaching, processar_dto_gc, processar_aba_promocao, calcular_politica_comercial, calcular_execucao_menu, calcular_tarefas_cerveja, processar_score5, processar_rotina_mais, calcular_tarefas_nab, calcular_tarefas_volume, calcular_tarefas_marketplace, calcular_tarefas_match, calcular_tarefas_cerveja_zero, calcular_todos_spo_tasks, processar_pedido_alone, processar_rgb, processar_cupons_digitais, processar_loja_ideal, processar_scanntech, processar_portfolio_ideal, processar_atendimento_produtivo, processar_devolucoes_relatorio, processar_grade_estoque, processar_faturados, processar_buffer, processar_cora, processar_coleta, processar_pedidos_historico, processar_rota_efetiva, processar_ln, processar_comodatos, processar_cora_completo, processar_missoes, processar_planificador_ttc
 from sheets_service import ler_aba, sobrescrever_aba, atualizar_status_arquivo
 import pandas as pd
 
@@ -207,6 +207,14 @@ def upload_ambos():
         except Exception as e:
             traceback.print_exc()
             resultados["tasks"] = f"❌ Erro: {str(e)[:100]}"
+
+    if "planificador_ttc" in arquivos:
+        try:
+            processar_planificador_ttc(arquivos["planificador_ttc"].read())
+            resultados["planificador_ttc"] = "✅ Planificador TTC processado (KPI 8)"
+        except Exception as e:
+            traceback.print_exc()
+            resultados["planificador_ttc"] = f"❌ Erro: {str(e)[:100]}"
 
     if "missoes" in arquivos:
         try:
@@ -858,13 +866,15 @@ ITENS_BI = {
 ORDEM = ["clientes", "produtos_base", "faturamento_mktp", "pontos_bees",
          "spo_visitacao_gv", "spo_coaching", "spo_dto", "spo_promo", "spo_score5",
          "spo_alone", "spo_rgb", "spo_cupons", "spo_loja_ideal", "spo_scanntech",
-         "spo_portfolio_ideal", "spo_ap", "tasks", "missoes", "inadimplencia", "devolucoes",
+         "spo_portfolio_ideal", "spo_ap", "tasks", "missoes", "planificador_ttc", "inadimplencia", "devolucoes",
          "pedidos", "cora", "comodatos", "grade"]
 
 
 def detectar_tipo(nome):
     base = str(nome).rsplit("/", 1)[-1]
     low = base.lower()
+    if "planific" in low:      # "Planificador TTC ..." (antes de "task")
+        return "planificador_ttc"
     if "miss" in low:          # "missoes.xlsx" / "Missões ..." (antes de "task")
         return "missoes"
     if "task" in low:
@@ -962,6 +972,8 @@ def upload_zip():
                 processar_atendimento_produtivo(b, mes_ref=mes_ref); precisa_rv = True
             elif campo == "missoes":
                 processar_missoes(b)
+            elif campo == "planificador_ttc":
+                processar_planificador_ttc(b)
             elif campo == "tasks":
                 processar_tasks(b)
                 try:

@@ -465,6 +465,9 @@ META_POLITICA = 60  # 60%
 def calcular_politica_comercial():
     """Calcula aderência de política comercial a partir das tasks importadas."""
     print("📊 Calculando Política Comercial (SPO Item 8)...")
+    if _tem_planificador():
+        print("  ↪ KPI 8 vem do Planificador TTC (importado) — cálculo por tasks ignorado")
+        return pd.DataFrame()
 
     TASKS_TTC_LOCAL = {"03_05_09", "03_03_01", "03_04_01", "03_05_10"}
     META_POLITICA_LOCAL = 60
@@ -1080,6 +1083,149 @@ def processar_rota_efetiva(conteudo_bytes, mes_ref=None):
         atualizar_status_arquivo("Rota Efetiva", "❌ ERRO", str(e)[:200])
         print(f"  ❌ Erro Rota Efetiva: {e}")
         return pd.DataFrame()
+
+
+# ─── SPO — PLANIFICADOR DE EXECUÇÃO TTC (KPI 8 · Aderência da Política Comercial) ──
+# Fonte oficial do KPI 8 a partir do Q4/2026 (antes era aproximado só pelas tasks).
+# Uma linha por PDV Comprador RGB Coletável (base). REAL = Aderidos E Executados / base.
+
+def _tem_planificador():
+    """True se já existe planificador importado — aí o KPI 8 sai dele, não das tasks."""
+    try:
+        return not ler_aba("planificador_ttc").empty
+    except Exception:
+        return False
+
+
+def _resumo_planificador(df, mes_ref):
+    """Monta o spo_politica_resumo (por setor + OPERACAO) a partir do planificador."""
+    def linha(setor, g):
+        base = len(g)
+        ad   = int((g["aderido"] == "SIM").sum())
+        ex   = int((g["executado"] == "SIM").sum())
+        ae   = int((g["aderido_exec"] == "SIM").sum())
+        rec  = int(g[["fraude", "regra_60", "sem_sku", "outros"]].sum().sum())
+        return {
+            "setor": setor, "gv": str(g["gv"].iloc[0]) if setor != "OPERACAO" and base else "",
+            "base": base, "pdvs_aderidos": ad, "pdvs_executados": ex, "pdvs_execucao": ae,
+            "pct": round(ae / base * 100, 1) if base else 0,
+            "pct_aderidos": round(ad / base * 100, 1) if base else 0,
+            "pct_executados": round(ex / base * 100, 1) if base else 0,
+            "aderidos_sem_exec": int(((g["aderido"] == "SIM") & (g["executado"] != "SIM")).sum()),
+            "tasks_totais": int(g["totais"].sum()), "validadas": int(g["validadas"].sum()),
+            "justificadas": int(g["justificadas"].sum()), "sem_visita": int(g["sem_visita"].sum()),
+            "recusadas": rec, "fonte": "planificador", "mes_referencia": mes_ref,
+        }
+    resumo = [linha(s, g) for s, g in sorted(df.groupby("setor"), key=lambda x: x[0])]
+    resumo.append(linha("OPERACAO", df))
+    return pd.DataFrame(resumo)
+
+
+def processar_planificador_ttc(conteudo_bytes):
+    """Planificador de Execução TTC do BI (export da tabela): Operação | UNB | PDV | GV |
+    Setor | Segmentação Primária | Nome PDV | Frequência Visita | PDV Aderido e Executado |
+    PDV Aderido | Peso Volume Aderido | PDV Executado | Validadas | Totais | Justificadas |
+    Sem Visita | Fraude | Regra 60% | Sem Identificação SKU | Outros (tasks TTC L60d).
+    Gera `planificador_ttc` (1 linha/PDV) e o `spo_politica_resumo` (KPI 8).
+    Arquivo FILTRADO (só alguns setores) atualiza só esses setores."""
+    import re as _re
+    print("📂 Processando Planificador de Execução TTC (SPO Item 8)...")
+    bruto = pd.read_excel(io.BytesIO(conteudo_bytes), header=None, dtype=str)
+    # o cabeçalho é a 1ª linha que tem "PDV Aderido" (o export às vezes traz filtros antes)
+    hdr = next((i for i in range(min(10, len(bruto)))
+                if any("PDV ADERIDO" in _txt(v).upper() for v in bruto.iloc[i])), None)
+    if hdr is None:
+        raise ValueError("Cabeçalho do planificador não encontrado (coluna 'PDV Aderido').")
+    df = bruto.iloc[hdr + 1:].copy()
+    df.columns = [_txt(c) for c in bruto.iloc[hdr]]
+
+    def norm(t):
+        t = _txt(t).upper()
+        for a, b in (("Ã", "A"), ("Á", "A"), ("Ç", "C"), ("Ê", "E"), ("É", "E"), ("Ê", "E"), ("Ó", "O"), ("Ú", "U"), ("Í", "I")):
+            t = t.replace(a, b)
+        return _re.sub(r"\s+", " ", t)
+    mapa = {norm(c): c for c in df.columns if c}
+
+    def col(*nomes, obrig=True):
+        for n in nomes:
+            if norm(n) in mapa: return mapa[norm(n)]
+        if obrig:
+            raise ValueError(f"Coluna não encontrada: {nomes[0]}. Disponíveis: {list(mapa.values())}")
+        return None
+
+    c_setor, c_pdv, c_ae = col("Setor"), col("PDV"), col("PDV Aderido e Executado")
+    c_ad, c_ex = col("PDV Aderido"), col("PDV Executado")
+
+    def num(c):
+        if not c or c not in df.columns: return pd.Series(0, index=df.index)
+        return pd.to_numeric(df[c].map(_txt).str.replace("%", "").str.replace(",", "."), errors="coerce").fillna(0)
+
+    def simnao(c):
+        return df[c].map(_txt).str.upper().map(lambda s: "SIM" if s.startswith("S") else "NÃO")
+
+    df = df[df[c_pdv].map(_txt) != ""]
+    df["_setor"] = df[c_setor].apply(normalizar_setor)
+    # 997/995 (PDV sem RN) ficam: entram na base da OPERAÇÃO como no BI (306 = 302 + 4 do 997)
+    df = df[df["_setor"].isin(SETORES_VALIDOS) | df["_setor"].isin(["995", "997"])].copy()
+
+    peso = num(col("Peso Volume Aderido", obrig=False))
+    if len(peso) and peso.max() > 1.5:   # veio em 0–100 em vez de 0–1
+        peso = peso / 100
+    hoje = hoje_brasilia()
+    mes_ref = f"{hoje.year}-{hoje.month:02d}"
+    c_gv, c_nome = col("GV", obrig=False), col("Nome PDV", obrig=False)
+    c_seg, c_freq = col("Segmentação Primária", "Segmentacao Primaria", obrig=False), col("Frequência Visita", "Frequencia Visita", obrig=False)
+    txt = lambda c: df[c].map(_txt) if c else ""
+    out = pd.DataFrame({
+        "setor":        df["_setor"],
+        "gv":           txt(c_gv).str.replace(r"\.0$", "", regex=True) if c_gv else "",
+        "cod_pdv":      df[c_pdv].map(_txt).str.replace(r"\.0$", "", regex=True).str.lstrip("0"),
+        "nome_pdv":     txt(c_nome),
+        "segmento":     txt(c_seg),
+        "dia_visita":   txt(c_freq).str.strip("/ ") if c_freq else "",
+        "aderido_exec": simnao(c_ae),
+        "aderido":      simnao(c_ad),
+        "peso_aderido": (peso * 100).round(1),
+        "executado":    simnao(c_ex),
+        "validadas":    num(col("Validadas", obrig=False)).astype(int),
+        "totais":       num(col("Totais", obrig=False)).astype(int),
+        "justificadas": num(col("Justificadas", obrig=False)).astype(int),
+        "sem_visita":   num(col("Sem Visita", obrig=False)).astype(int),
+        "fraude":       num(col("Fraude", obrig=False)).astype(int),
+        "regra_60":     num(col("Regra 60%", "Regra 60", obrig=False)).astype(int),
+        "sem_sku":      num(col("Sem Identificação SKU", "Sem Identificacao SKU", obrig=False)).astype(int),
+        "outros":       num(col("Outros", obrig=False)).astype(int),
+        "mes_referencia": mes_ref,
+    })
+
+    setores_novos = sorted(set(out["setor"])) if not out.empty else []
+    mantidos = []
+    try:
+        antigo = ler_aba("planificador_ttc")
+        if not antigo.empty and "setor" in antigo.columns and setores_novos:
+            antigo["setor"] = antigo["setor"].astype(str).str.strip().map(setor_hop)
+            fora = antigo[~antigo["setor"].isin(setores_novos)]
+            if not fora.empty:
+                mantidos = sorted(set(fora["setor"]))
+                out = pd.concat([out, fora[[c for c in out.columns if c in fora.columns]]], ignore_index=True)
+    except Exception as e:
+        print(f"  ⚠️ planificador anterior não lido (segue só com o arquivo): {e}")
+
+    for c in ("validadas", "totais", "justificadas", "sem_visita", "fraude", "regra_60", "sem_sku", "outros"):
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0).astype(int)
+    sobrescrever_aba("planificador_ttc", out)
+    resumo = _resumo_planificador(out, mes_ref)
+    sobrescrever_aba("spo_politica_resumo", resumo)
+
+    op = resumo[resumo["setor"] == "OPERACAO"].iloc[0]
+    msg = (f"{int(op['base'])} PDVs base · {int(op['pdvs_execucao'])} aderidos e executados ({op['pct']}%) · "
+           f"{int(op['aderidos_sem_exec'])} aderidos sem execução · setores: {', '.join(setores_novos) or '—'}")
+    if mantidos:
+        msg += f" · ⚠️ arquivo parcial — mantidos da importação anterior: {', '.join(mantidos)}"
+    atualizar_status_arquivo("Planificador TTC (BI)", "⚠️ Parcial" if mantidos else "✅ OK", msg)
+    atualizar_status_arquivo("SPO - Política Comercial", "✅ OK", f"Planificador: {op['pct']}% ({int(op['pdvs_execucao'])}/{int(op['base'])} PDVs)")
+    print(f"  {msg}")
+    return out
 
 
 __all__ = [n for n in dir() if not n.startswith("__")]

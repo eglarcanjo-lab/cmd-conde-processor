@@ -2,7 +2,7 @@
 Dividido de processor.py (Auditoria out/26). processor.py reexporta tudo:
 quem faz `from processor import X` continua funcionando."""
 from proc_base import *  # noqa: F401,F403
-from proc_spo_visitas import TASKS_TTC
+from proc_spo_visitas import TASKS_TTC, _tem_planificador
 
 
 
@@ -562,6 +562,8 @@ def processar_ln(conteudo_bytes, mes_ref=None):
 
 def _calcular_politica_com_df(df_tasks, mes_ref=None):
     """Wrapper de calcular_politica_comercial usando df já carregado."""
+    if _tem_planificador():   # KPI 8 oficial vem do Planificador TTC
+        return
     TASKS_TTC = {"03_05_09", "03_03_01", "03_04_01", "03_05_10"}
     SETORES_LOCAL = SETORES_VALIDOS
     META = 60
