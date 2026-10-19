@@ -284,8 +284,11 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         sobrescrever_por_mes("ruptura_pedidos_base", base, "mes_referencia")
         tot = int((rp["tipo"] == "TOTAL").sum())
         res["ruptura_pedidos"] = f"{len(rp)} pedidos com falta · {tot} ruptura total · {len(rp) - tot} parcial"
+        atualizar_status_arquivo("Ruptura por pedido (CORA)", "✅ OK", res["ruptura_pedidos"])
     except Exception as e:
+        import traceback; traceback.print_exc()
         print(f"  ⚠️ ruptura_pedidos: {e}")
+        atualizar_status_arquivo("Ruptura por pedido (CORA)", "❌ ERRO", f"{type(e).__name__}: {str(e)[:180]}")
 
     # ── 1) PEDIDOS → formato Promax 03014701 → processar_pedidos (todas as análises) ──
     dd = lambda s: s.dt.strftime("%d/%m/%Y").fillna("")
