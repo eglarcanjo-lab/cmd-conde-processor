@@ -231,6 +231,59 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     except Exception as e:
         print(f"  ⚠️ anomalia_pedidos: {e}")
 
+    # ── 1d) RUPTURA POR PEDIDO → ruptura_pedidos + ruptura_pedidos_base ──────────────
+    # Pedidos de VENDA (op 1) com algum item em FALTA. TOTAL = nenhum item atendido (o pedido
+    # é cancelado/fica sem nada → o cliente não comprou nada naquele pedido); PARCIAL = faltou
+    # parte. "recomprou" = o PDV teve item atendido em OUTRO pedido de venda: MESMO DIA (pedido
+    # dividido — comprou o resto) · ATÉ 7 DIAS (voltou a comprar) · NÃO (venda perdida em 7 dias).
+    # ruptura_pedidos_base = total de pedidos de venda por dia × setor (p/ o % de pedidos).
+    try:
+        vv = df[(df["_op"] == "1") & df["_setor"].isin(SETORES_VALIDOS)].copy()
+        vv["_ped"] = t("Número pedido").loc[vv.index].str.replace(r"\.0$", "", regex=True)
+        vv["_pdv"] = t("Cód. cliente").loc[vv.index].str.lstrip("0")
+        vv["_falta"] = vv["_atend_item"] == "FALTA"
+        vv["_atend"] = vv["_atend_item"] == "ATENDIDO"
+        vv["_vl"] = _num_br(t("Valor líquido item").loc[vv.index])
+        vv["_hlf"] = vv["_hl"].where(vv["_falta"], 0.0)
+        vv["_vlf"] = vv["_vl"].where(vv["_falta"], 0.0)
+        vv["_prod"] = t("Desc. produto").loc[vv.index].map(_txt)
+        vv["_dstr"] = vv["_data"].dt.strftime("%d/%m/%Y")
+        g = vv.groupby("_ped")
+        ped = pd.DataFrame({
+            "data": g["_dstr"].first(), "_dt": g["_data"].first(), "mes_referencia": g["_mes"].first(),
+            "setor": g["_setor"].first(), "cod_pdv": g["_pdv"].first(),
+            "nome_pdv": g.apply(lambda x: _txt(t("Nome cliente").loc[x.index[0]]), include_groups=False),
+            "pedido_cliente": g.apply(lambda x: _txt(t("Número pedido cliente").loc[x.index[0]]), include_groups=False),
+            "situacao_pedido": g["_sit_ped"].first(),
+            "itens": g.size(), "itens_falta": g["_falta"].sum(), "itens_atendidos": g["_atend"].sum(),
+            "hl_pedido": g["_hl"].sum(), "hl_falta": g["_hlf"].sum(), "valor_falta": g["_vlf"].sum(),
+        })
+        base = ped.groupby(["mes_referencia", "data", "setor"]).size().reset_index(name="pedidos")
+        rp = ped[ped["itens_falta"] > 0].copy()
+        faltas = vv[vv["_falta"]].groupby("_ped")["_prod"].apply(lambda s: " | ".join(sorted(set(p for p in s if p))))
+        rp["produtos_falta"] = faltas.reindex(rp.index).fillna("").str.slice(0, 400)
+        rp["tipo"] = rp["itens_atendidos"].map(lambda n: "PARCIAL" if n > 0 else "TOTAL")
+        # Recompra: outro pedido do mesmo PDV com item atendido, do dia do pedido até +7 dias
+        comp = vv[vv["_atend"]].groupby(["_pdv", "_ped"])["_data"].min().reset_index()
+        rec, dias = [], []
+        for idx, r in rp.iterrows():
+            c = comp[(comp["_pdv"] == r["cod_pdv"]) & (comp["_ped"] != idx) &
+                     (comp["_data"] >= r["_dt"]) & (comp["_data"] <= r["_dt"] + pd.Timedelta(days=7))]
+            d0 = int((c["_data"].min() - r["_dt"]).days) if len(c) else None
+            rec.append("NÃO" if d0 is None else ("MESMO DIA" if d0 == 0 else "ATÉ 7 DIAS"))  # mesmo dia = pedido dividido
+            dias.append(int((c["_data"].min() - r["_dt"]).days) if len(c) else "")
+        rp["recomprou"], rp["dias_ate_recompra"] = rec, dias
+        rp["num_pedido"] = rp.index
+        for c in ("hl_pedido", "hl_falta"): rp[c] = rp[c].round(3)
+        rp["valor_falta"] = rp["valor_falta"].round(2)
+        rp = rp.drop(columns=["_dt"]).reset_index(drop=True)
+        sobrescrever_por_mes("ruptura_pedidos", rp, "mes_referencia")
+        sobrescrever_por_mes("ruptura_pedidos_base", base, "mes_referencia")
+        tot = int((rp["tipo"] == "TOTAL").sum())
+        res["ruptura_pedidos"] = f"{len(rp)} pedidos com falta · {tot} ruptura total · {len(rp) - tot} parcial"
+    except Exception as e:
+        print(f"  ⚠️ ruptura_pedidos: {e}")
+
     # ── 1) PEDIDOS → formato Promax 03014701 → processar_pedidos (todas as análises) ──
     dd = lambda s: s.dt.strftime("%d/%m/%Y").fillna("")
     fmt = lambda v: v.round(3).map(lambda x: f"{x:.3f}".replace(".", ","))
