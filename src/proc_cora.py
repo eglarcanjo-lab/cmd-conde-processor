@@ -194,6 +194,43 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     except Exception as e:
         print(f"  ⚠️ cora_dia: {e}")
 
+    # ── 1c) ANOMALIA DE VOLUME → anomalia_pedidos ────────────────────────────────────
+    # Setores que NÃO podem ter pedido (102 = sem RN, 995/997 = PDVs sem RN): TODO item do mês
+    # ATUAL desses setores, com o máximo de informação do pedido (zera todo mês: só o mês vivo).
+    # Base do estudo "Anomalia de Volume" (Outros relatórios), que sugere RN e dia de visita.
+    try:
+        mes_vivo = hoje_brasilia().strftime("%Y-%m")
+        an = df[df["_setor"].isin(SETORES_ANOMALIA) & (df["_mes"] == mes_vivo)]
+        cols_an = {
+            "num_pedido": "Número pedido", "pedido_cliente": "Número pedido cliente", "id_pedido": "ID do pedido",
+            "tipo_pedido": "Tipo pedido", "data_entrada": "Data entrada", "data_entrega": "Data entrega",
+            "data_nf": "Data emissão NF", "nf": "Número NF", "situacao_pedido": "Situação pedido",
+            "situacao_atend_pedido": "Situação atend. pedido", "situacao_item": "Situação item",
+            "situacao_atend_item": "Situação atend. item", "canal_origem": "Canal origem", "canal_marcacao": "Canal marcação",
+            "usuario_digitacao": "Usuário digitação", "motivo_digitacao": "Motivo digitação",
+            "cod_operacao": "Cód. operação", "operacao": "Desc. operação", "tipo_movimento": "Desc. tipo movimento",
+            "setor_cora": "Cód. setor", "desc_setor": "Desc. setor", "cod_vendedor": "Cód. vendedor", "vendedor": "Nome vendedor",
+            "cnpj": "CPF/CNPJ cliente", "cod_pdv": "Cód. cliente", "nome_pdv": "Nome cliente", "nome_fantasia": "Nome fantasia",
+            "municipio": "Desc. município", "forma_pagamento": "Forma de pagamento", "condicao_pagamento": "Condição de pagamento",
+            "cod_produto": "Cód. produto", "nome_produto": "Desc. produto", "quantidade": "Quant. venda", "unidade": "Unidade venda",
+            "valor_unitario": "Valor unitário líquido", "valor_item": "Valor líquido item", "volume_hl_txt": "Volume hectolitro",
+            "itinerario": "Itinerário", "placa": "Placa", "valor_total_nf": "Valor total NF",
+            "motivo_cancelamento": "Motivo cancelamento", "motivo_corte": "Motivo corte",
+        }
+        out_an = pd.DataFrame({k: t(v).loc[an.index].map(_txt).values for k, v in cols_an.items()})
+        out_an["setor"] = an["_setor"].values
+        out_an["cod_pdv"] = out_an["cod_pdv"].str.replace(r"\.0$", "", regex=True).str.lstrip("0")
+        out_an["cod_produto"] = out_an["cod_produto"].str.replace(r"\.0$", "", regex=True).str.lstrip("0")
+        out_an["volume_hl"] = an["_hl"].round(4).values
+        out_an["data"] = an["_data"].dt.strftime("%d/%m/%Y").values
+        out_an["venda"] = an["_venda"].map({True: "SIM", False: "NÃO"}).values
+        out_an["mes_referencia"] = mes_vivo
+        out_an = out_an.drop(columns=["volume_hl_txt"])
+        sobrescrever_aba("anomalia_pedidos", out_an)
+        res["anomalia"] = f"{out_an['cod_pdv'].nunique()} PDVs · {out_an['num_pedido'].nunique()} pedidos em setores sem RN ({mes_vivo})"
+    except Exception as e:
+        print(f"  ⚠️ anomalia_pedidos: {e}")
+
     # ── 1) PEDIDOS → formato Promax 03014701 → processar_pedidos (todas as análises) ──
     dd = lambda s: s.dt.strftime("%d/%m/%Y").fillna("")
     fmt = lambda v: v.round(3).map(lambda x: f"{x:.3f}".replace(".", ","))

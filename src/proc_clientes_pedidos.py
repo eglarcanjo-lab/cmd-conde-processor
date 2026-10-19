@@ -24,6 +24,30 @@ def processar_clientes(conteudo_bytes):
     # Filtrar ativos dos setores válidos
     df["_setor"] = df["Setor VDE"].apply(normalizar_setor)
     df["_status"] = df["Status do PDV"].str.strip().str.upper()
+
+    # PDVs dos setores que não podem ter pedido (102/995/997) — qualquer status — guardados à
+    # parte p/ o estudo "Anomalia de Volume" (cidade/bairro p/ sugerir RN e dia de visita).
+    try:
+        fz = df[df["_setor"].isin(SETORES_ANOMALIA)]
+        _cb = next((c for c in df.columns if c.upper() == "BAIRRO" or c.upper().startswith("BAIRRO ")), None)
+        _ce = next((c for c in df.columns if c.upper().startswith(("ENDEREÇO", "ENDERECO", "LOGRADOURO"))), None)
+        sobrescrever_aba("pdv_fora", pd.DataFrame({
+            "cod_pdv": fz["Cód PDV"].astype(str).str.strip().str.lstrip("0").values,
+            "nome_fantasia": fz["Nome Fantasia"].map(_txt).values if "Nome Fantasia" in fz.columns else "",
+            "razao_social": fz["Razão Social"].map(_txt).values if "Razão Social" in fz.columns else "",
+            "setor": fz["_setor"].values,
+            "status": fz["_status"].values,
+            "cidade": fz["Cidade"].map(_txt).values if "Cidade" in fz.columns else "",
+            "bairro": fz[_cb].map(_txt).values if _cb else "",
+            "endereco": fz[_ce].map(_txt).values if _ce else "",
+            "segmento": fz["Segmento NGE"].map(_txt).values if "Segmento NGE" in fz.columns else "",
+            "dia_visita": fz["Dia de Visita do VDE"].map(normalizar_dia_visita).values if "Dia de Visita do VDE" in fz.columns else "",
+            "ultima_compra": fz["Data da Última Compra"].map(_txt).values if "Data da Última Compra" in fz.columns else "",
+        }))
+        print(f"  → pdv_fora (102/995/997): {len(fz)} PDVs")
+    except Exception as e:
+        print(f"  ⚠️ pdv_fora: {e}")
+
     df = df[df["_setor"].isin(SETORES_VALIDOS)]
     df = df[df["_status"] == "ATIVO"]
 

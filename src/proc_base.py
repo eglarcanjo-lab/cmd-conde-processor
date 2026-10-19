@@ -24,6 +24,8 @@ SETORES_VALIDOS = {
     "101", "102", "103", "104", "105", "106", "107", "108", "109", "110", "111",
     "301", "302", "303", "304", "305",
 }
+# Setores que NÃO podem ter pedido (102 sem RN; 995/997 = PDVs sem RN) — estudo "Anomalia de Volume"
+SETORES_ANOMALIA = {"102", "995", "997"}
 
 
 DIAS_SEMANA_MAP = {
