@@ -248,12 +248,15 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         vv["_vlf"] = vv["_vl"].where(vv["_falta"], 0.0)
         vv["_prod"] = t("Desc. produto").loc[vv.index].map(_txt)
         vv["_dstr"] = vv["_data"].dt.strftime("%d/%m/%Y")
+        # (sem groupby.apply(include_groups=…): o Render roda pandas 2.1, que não tem esse parâmetro)
+        vv["_nome"] = t("Nome cliente").loc[vv.index].map(_txt)
+        vv["_pcli"] = t("Número pedido cliente").loc[vv.index].map(_txt)
         g = vv.groupby("_ped")
         ped = pd.DataFrame({
             "data": g["_dstr"].first(), "_dt": g["_data"].first(), "mes_referencia": g["_mes"].first(),
             "setor": g["_setor"].first(), "cod_pdv": g["_pdv"].first(),
-            "nome_pdv": g.apply(lambda x: _txt(t("Nome cliente").loc[x.index[0]]), include_groups=False),
-            "pedido_cliente": g.apply(lambda x: _txt(t("Número pedido cliente").loc[x.index[0]]), include_groups=False),
+            "nome_pdv": g["_nome"].first(),
+            "pedido_cliente": g["_pcli"].first(),
             "situacao_pedido": g["_sit_ped"].first(),
             "itens": g.size(), "itens_falta": g["_falta"].sum(), "itens_atendidos": g["_atend"].sum(),
             "hl_pedido": g["_hl"].sum(), "hl_falta": g["_hlf"].sum(), "valor_falta": g["_vlf"].sum(),
