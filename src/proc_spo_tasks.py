@@ -347,13 +347,30 @@ def calcular_todos_spo_tasks():
 
 
 
+def _qtd_validas(df):
+    """Validações por linha, como o BI conta: a coluna "Validada" do relatório (task de Combo
+    vale 2, 3… validações). Linha VALID sem número na coluna conta 1."""
+    q = pd.to_numeric(df["validada"], errors="coerce").fillna(0) if "validada" in df.columns else pd.Series(0, index=df.index)
+    valid = df["status"].astype(str).str.strip().str.upper() == "VALID"
+    return q.where(q > 0, valid.astype(int)).where(valid, 0).astype(int)
+
+
+# Tasks de portfólio sem categoria no relatório (ex.: INPUT_MANUAL "Auxilie o PDV na cobertura
+# de Match (Beats, Flying Fish, Brutal Fruit)") — o BI põe na cesta pelo texto.
+_CESTA_PELO_TEXTO = {"match": r"\bmatch\b"}
+
+
 def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_nome, meta, mes_ref=None):
     """Calcula tasks SPO com DataFrame já carregado — evita chamada extra ao Sheets."""
     SETORES_LOCAL = SETORES_VALIDOS
 
     mask = df_tasks["cluster_primario"].astype(str).str.strip().str.lower() == cluster
     if cesta:
-        mask &= df_tasks["categoria"].astype(str).str.strip().str.lower() == cesta
+        cat = df_tasks["categoria"].astype(str).str.strip().str.lower()
+        m_cat = cat == cesta
+        if cesta in _CESTA_PELO_TEXTO:   # sem categoria + texto da cesta (como o BI)
+            m_cat |= cat.isin(["", "nan", "none"]) & df_tasks["descricao"].astype(str).str.contains(_CESTA_PELO_TEXTO[cesta], case=False, regex=True, na=False)
+        mask &= m_cat
     df = df_tasks[mask].copy()
 
     if df.empty and cesta:
@@ -377,7 +394,7 @@ def _calcular_tasks_com_df(df_tasks, cluster, cesta, filtro_texto, aba, status_n
         return
 
     df["_setor"]  = df["setor"].astype(str).str.strip().map(setor_hop)
-    df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
+    df["_valida"] = _qtd_validas(df)   # nº de validações (Combo conta mais de 1), igual ao BI
     # Deriva o mês do dado (campo mes_ano do BI), não da data atual
     mes_ref = mes_ref or _mes_ref_do_dado(df, "mes_ano", "data_visita")
 
@@ -435,7 +452,7 @@ def _calcular_sku_pdv_com_df(df_tasks, mes_ref=None):
     print(f"  [{status_nome}] {len(df)} tasks encontradas")
     if df.empty:
         return
-    df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
+    df["_valida"] = _qtd_validas(df)   # igual ao BI (Combo conta mais de 1)
     mes_ref = mes_ref or _mes_ref_do_dado(df, "mes_ano", "data_visita")
 
     CATS = ["CERVEJA", "NAB", "MATCH", "MARKETPLACE"]
@@ -522,7 +539,7 @@ def _calcular_tasks_ln_com_df(df_tasks, mes_ref=None):
         print(f"  [{status_nome}] ⚠️ 0 tasks — descrições com 'neck/ln': {amostra}")
         atualizar_status_arquivo(status_nome, "⚠️ Sem tasks", f"Nenhuma task de LN HE/Zero no relatório de Tasks ({mes_ref})")
         return
-    df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
+    df["_valida"] = _qtd_validas(df)   # igual ao BI (Combo conta mais de 1)
 
     def _linha(setor, grp):
         total = len(grp); validas = int(grp["_valida"].sum())
@@ -543,7 +560,7 @@ def _calcular_tasks_ln_com_df(df_tasks, mes_ref=None):
         "justificativa": col("justificativa"), "mes_referencia": mes_ref,
     }).sort_values(["setor", "status", "tipo"])
     sobrescrever_aba("spo_tasks_ln_tasks", det)
-    he = int(df[df["_valida"] & (df["_tipo"] == "HE")].shape[0]); ze = op["tasks_validas"] - he
+    he = int(df.loc[df["_tipo"] == "HE", "_valida"].sum()); ze = op["tasks_validas"] - he
     atualizar_status_arquivo(status_nome, "✅ OK",
         f"{mes_ref}: {op['tasks_validas']} validadas de {op['tasks_total']} (HE {he} · Zero {ze})")
     print(f"    ✅ Long Neck ({mes_ref}): {op['tasks_validas']}/{op['tasks_total']} validadas (HE {he} · Zero {ze})")
