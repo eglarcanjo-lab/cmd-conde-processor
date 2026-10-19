@@ -332,7 +332,8 @@ def calcular_todos_spo_tasks():
         ("Tasks Cerveja Zero",  lambda: _calcular_tasks_com_df(df_tasks, "desenvolvimento de portfólio", "beer",        r"\bzero\b|\bcero\b", "spo_tasks_cerv_zero_resumo", "SPO - Tasks Cerveja Zero", 60, mes_ref=_mr)),
         ("Tasks Digitalização", lambda: _calcular_tasks_com_df(df_tasks, "digitalização bees",            None,          None,           "spo_tasks_digit_resumo",      "SPO - Tasks Digitalização",60, mes_ref=_mr)),
         ("Tasks SKU/PDV TT",    lambda: _calcular_sku_pdv_com_df(df_tasks, mes_ref=_mr)),
-        # +LN saiu daqui: agora vem de um arquivo dedicado (processar_ln / campo spo_ln).
+        # Long Neck: Q3 vinha do arquivo dedicado (processar_ln); Q4 (out/26+) = tasks LN HE/Zero
+        ("Tasks Long Neck",     lambda: _calcular_tasks_ln_com_df(df_tasks, mes_ref=_mr)),
     ]
 
     for nome, fn in funcoes:
@@ -471,6 +472,83 @@ def _calcular_sku_pdv_com_df(df_tasks, mes_ref=None):
 
 
 
+
+# ─── Tarefas de Long Neck — HE + Zero (KPI 27 · Q4/2026) ────────────────────────────
+# Doc Q4: meta em nº ABSOLUTO de tasks válidas de Long Neck HIGH END ou ZERO (Spaten LN,
+# Corona LN, Corona Cero, Brahma Zero, "SKUs distintos de LN HE"...). Clusters de portfólio
+# e volume. LN Core (ex.: Brahma regular) NÃO conta. Tri = acumulado (soma dos meses).
+# Antes (Q3) vinha de um arquivo dedicado (processar_ln: PDVs que bateram) — de out/26 em
+# diante sai do relatório de Tasks.
+_VIRADA_LN_TASKS = "2026-10"
+_RE_LN = r"long\s*necks?|\+\s*ln\b|\bln\b"
+_RE_LN_ZERO = r"\bzero\b|\bcero\b|\b0[.,]0\b"
+_RE_LN_HE = (r"\bhe\b|high\s*end|\+\s*ln\b|corona|stella|spaten|michelob|beck'?s|leffe|"
+             r"hoegaarden|patagonia|colorado|goose")
+
+
+def _classifica_ln(desc):
+    """'HE' / 'ZERO' para task de Long Neck HE ou Zero; None p/ o resto (inclui LN Core)."""
+    import re as _re
+    d = _sem_acento(desc)
+    if not _re.search(_RE_LN, d):
+        return None
+    if _re.search(_RE_LN_ZERO, d):
+        return "ZERO"
+    if _re.search(_RE_LN_HE, d):
+        return "HE"
+    return None
+
+
+def _calcular_tasks_ln_com_df(df_tasks, mes_ref=None):
+    """Tarefas de Long Neck HE + Zero (KPI 27). Realizado = Σ tasks VALID (absoluto).
+    Gera spo_tasks_ln_resumo (acumula por mês, mesmas colunas do Q3) e
+    spo_tasks_ln_tasks (detalhe task a task do mês vivo)."""
+    SETORES_LOCAL = SETORES_VALIDOS
+    status_nome = "SPO - Tasks Long Neck"
+    mes_ref = mes_ref or _mes_ref_do_dado(df_tasks, "mes_ano", "data_visita")
+    if not mes_ref or mes_ref < _VIRADA_LN_TASKS:
+        print(f"  [{status_nome}] mês {mes_ref} é do Q3 — Long Neck vem do arquivo dedicado (+LN)")
+        return
+    clus = df_tasks["cluster_primario"].apply(_sem_acento)
+    tipo = df_tasks["descricao"].apply(_classifica_ln)
+    df = df_tasks[(clus.str.contains("portfolio") | clus.str.contains("volume")) & tipo.notna()].copy()
+    df["_tipo"] = tipo[df.index]
+    df["_setor"] = df["setor"].astype(str).str.strip().map(setor_hop)
+    df = df[df["_setor"].isin(SETORES_LOCAL)]
+    print(f"  [{status_nome}] {len(df)} tasks de LN HE/Zero")
+    if df.empty:
+        amostra = df_tasks["descricao"].astype(str)
+        amostra = amostra[amostra.str.contains(r"neck|\bln\b", case=False, na=False, regex=True)].unique()[:8].tolist()
+        print(f"  [{status_nome}] ⚠️ 0 tasks — descrições com 'neck/ln': {amostra}")
+        atualizar_status_arquivo(status_nome, "⚠️ Sem tasks", f"Nenhuma task de LN HE/Zero no relatório de Tasks ({mes_ref})")
+        return
+    df["_valida"] = df["status"].astype(str).str.strip().str.upper() == "VALID"
+
+    def _linha(setor, grp):
+        total = len(grp); validas = int(grp["_valida"].sum())
+        pct = round(validas / total * 100, 1) if total > 0 else 0
+        return {"setor": setor, "tasks_total": total, "tasks_validas": validas,
+                "pct": pct, "ok": "OK" if pct >= 60 else "NOK", "mes_referencia": mes_ref}
+    resumo = [_linha(s, df[df["_setor"] == s]) for s in sorted(df["_setor"].unique())]
+    op = _linha("OPERACAO", df)
+    resumo.append(op)
+    sobrescrever_por_mes("spo_tasks_ln_resumo", pd.DataFrame(resumo), "mes_referencia")
+
+    col = lambda c: df[c].astype(str).str.strip() if c in df.columns else ""
+    det = pd.DataFrame({
+        "setor": df["_setor"], "gv": col("gv"), "cod_pdv": col("cod_pdv"), "tipo": df["_tipo"],
+        "cluster": col("cluster_primario"), "descricao": col("descricao"),
+        "qtd_solicitada": col("qtd_solicitada"), "qtd_comprada": col("qtd_comprada"),
+        "status": col("status").str.upper(), "data_visita": col("data_visita"),
+        "justificativa": col("justificativa"), "mes_referencia": mes_ref,
+    }).sort_values(["setor", "status", "tipo"])
+    sobrescrever_aba("spo_tasks_ln_tasks", det)
+    he = int(df[df["_valida"] & (df["_tipo"] == "HE")].shape[0]); ze = op["tasks_validas"] - he
+    atualizar_status_arquivo(status_nome, "✅ OK",
+        f"{mes_ref}: {op['tasks_validas']} validadas de {op['tasks_total']} (HE {he} · Zero {ze})")
+    print(f"    ✅ Long Neck ({mes_ref}): {op['tasks_validas']}/{op['tasks_total']} validadas (HE {he} · Zero {ze})")
+
+
 _MES_PT_REV = {"jan":1,"fev":2,"mar":3,"abr":4,"mai":5,"jun":6,"jul":7,"ago":8,"set":9,"out":10,"nov":11,"dez":12}
 
 def _mes_pt_para_ym(serie):
@@ -502,6 +580,9 @@ def processar_ln(conteudo_bytes, mes_ref=None):
         df.columns = [c.strip() for c in df.columns]
 
         mes_ref = mes_ref or _mes_pt_para_ym(df.get("Mes/Ano", pd.Series(dtype=str))) or hoje_brasilia().strftime("%Y-%m")
+        if mes_ref >= _VIRADA_LN_TASKS:   # Q4: o KPI virou nº de tasks LN HE/Zero (relatório de Tasks)
+            raise ValueError(f"Arquivo +LN é só do 3º tri. De {_VIRADA_LN_TASKS} em diante o KPI de Long Neck "
+                             "sai do relatório de Tasks (tasks de LN HE/Zero validadas) — importe as Tasks.")
 
         df["setor"] = df["RN"].astype(str).str.strip().map(setor_hop)
         df = df[df["setor"].isin(SETORES_LOCAL)].copy()
