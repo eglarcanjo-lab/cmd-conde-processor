@@ -172,19 +172,25 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     # situações do item (ATENDIDO, FALTA, ANULADO, AGUARDANDO_*), por dia (data = NF ou
     # entrega − 1, a mesma da HOP) × setor × PDV × produto. De 7 dias atrás em diante.
     # Volume Diário usa p/ os cards Dia/Operação/Atendidos/Ag./Faltas e as faltas por PDV/produto.
+    # MEMÓRIA (Render free 512MB): nos blocos 1b–1d NÃO copiar o df (são ~140 colunas) —
+    # trabalhar com o índice das linhas e ler só as colunas usadas (ts).
+    def ts(col, idx):
+        if col not in df.columns:
+            return pd.Series("", index=idx)
+        return df.loc[idx, col].astype(str).str.strip().replace("nan", "")
+
     try:
         ini = pd.Timestamp(hoje_brasilia()) - pd.Timedelta(days=7)   # 7 dias p/ trás + futuros (pedidos já marcados)
-        cd = df[df["_data"] >= ini]
-        cod_p = t("Cód. produto").loc[cd.index].str.replace(r"\.0$", "", regex=True).str.lstrip("0")
+        ci = df.index[df["_data"] >= ini]
         dia_df = pd.DataFrame({
-            "data": cd["_data"].dt.strftime("%d/%m/%Y").values,
-            "setor": cd["_setor"].values,
-            "cod_pdv": t("Cód. cliente").loc[cd.index].str.lstrip("0").values,
-            "nome_pdv": t("Nome cliente").loc[cd.index].values,
-            "cod_produto": cod_p.values,
-            "nome_produto": t("Desc. produto").loc[cd.index].map(_txt).values,
-            "situacao": cd["_atend_item"].replace("", "SEM_SITUACAO").values,
-            "volume_hl": cd["_hl"].values,
+            "data": df.loc[ci, "_data"].dt.strftime("%d/%m/%Y").values,
+            "setor": df.loc[ci, "_setor"].values,
+            "cod_pdv": ts("Cód. cliente", ci).str.lstrip("0").values,
+            "nome_pdv": ts("Nome cliente", ci).values,
+            "cod_produto": ts("Cód. produto", ci).str.replace(r"\.0$", "", regex=True).str.lstrip("0").values,
+            "nome_produto": ts("Desc. produto", ci).map(_txt).values,
+            "situacao": df.loc[ci, "_atend_item"].replace("", "SEM_SITUACAO").values,
+            "volume_hl": df.loc[ci, "_hl"].values,
         })
         dia_df = (dia_df.groupby(["data", "setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "situacao"], as_index=False)
                   ["volume_hl"].sum())
@@ -200,7 +206,8 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     # Base do estudo "Anomalia de Volume" (Outros relatórios), que sugere RN e dia de visita.
     try:
         mes_vivo = hoje_brasilia().strftime("%Y-%m")
-        an = df[df["_setor"].isin(SETORES_ANOMALIA) & (df["_mes"] == mes_vivo)]
+        ai = df.index[df["_setor"].isin(SETORES_ANOMALIA) & (df["_mes"] == mes_vivo)]
+        an = df.loc[ai, ["_setor", "_hl", "_data", "_venda"]]
         cols_an = {
             "num_pedido": "Número pedido", "pedido_cliente": "Número pedido cliente", "id_pedido": "ID do pedido",
             "tipo_pedido": "Tipo pedido", "data_entrada": "Data entrada", "data_entrega": "Data entrega",
@@ -217,7 +224,7 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
             "itinerario": "Itinerário", "placa": "Placa", "valor_total_nf": "Valor total NF",
             "motivo_cancelamento": "Motivo cancelamento", "motivo_corte": "Motivo corte",
         }
-        out_an = pd.DataFrame({k: t(v).loc[an.index].map(_txt).values for k, v in cols_an.items()})
+        out_an = pd.DataFrame({k: ts(v, ai).map(_txt).values for k, v in cols_an.items()})
         out_an["setor"] = an["_setor"].values
         out_an["cod_pdv"] = out_an["cod_pdv"].str.replace(r"\.0$", "", regex=True).str.lstrip("0")
         out_an["cod_produto"] = out_an["cod_produto"].str.replace(r"\.0$", "", regex=True).str.lstrip("0")
@@ -238,19 +245,20 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     # dividido — comprou o resto) · ATÉ 7 DIAS (voltou a comprar) · NÃO (venda perdida em 7 dias).
     # ruptura_pedidos_base = total de pedidos de venda por dia × setor (p/ o % de pedidos).
     try:
-        vv = df[(df["_op"] == "1") & df["_setor"].isin(SETORES_VALIDOS)].copy()
-        vv["_ped"] = t("Número pedido").loc[vv.index].str.replace(r"\.0$", "", regex=True)
-        vv["_pdv"] = t("Cód. cliente").loc[vv.index].str.lstrip("0")
+        vi = df.index[(df["_op"] == "1") & df["_setor"].isin(SETORES_VALIDOS)]
+        vv = df.loc[vi, ["_setor", "_data", "_mes", "_sit_ped", "_atend_item", "_hl"]].copy()
+        vv["_ped"] = ts("Número pedido", vi).str.replace(r"\.0$", "", regex=True)
+        vv["_pdv"] = ts("Cód. cliente", vi).str.lstrip("0")
         vv["_falta"] = vv["_atend_item"] == "FALTA"
         vv["_atend"] = vv["_atend_item"] == "ATENDIDO"
-        vv["_vl"] = _num_br(t("Valor líquido item").loc[vv.index])
+        vv["_vl"] = _num_br(ts("Valor líquido item", vi))
         vv["_hlf"] = vv["_hl"].where(vv["_falta"], 0.0)
         vv["_vlf"] = vv["_vl"].where(vv["_falta"], 0.0)
-        vv["_prod"] = t("Desc. produto").loc[vv.index].map(_txt)
+        vv["_prod"] = ts("Desc. produto", vi).map(_txt)
         vv["_dstr"] = vv["_data"].dt.strftime("%d/%m/%Y")
         # (sem groupby.apply(include_groups=…): o Render roda pandas 2.1, que não tem esse parâmetro)
-        vv["_nome"] = t("Nome cliente").loc[vv.index].map(_txt)
-        vv["_pcli"] = t("Número pedido cliente").loc[vv.index].map(_txt)
+        vv["_nome"] = ts("Nome cliente", vi).map(_txt)
+        vv["_pcli"] = ts("Número pedido cliente", vi).map(_txt)
         g = vv.groupby("_ped")
         ped = pd.DataFrame({
             "data": g["_dstr"].first(), "_dt": g["_data"].first(), "mes_referencia": g["_mes"].first(),
@@ -289,6 +297,9 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         import traceback; traceback.print_exc()
         print(f"  ⚠️ ruptura_pedidos: {e}")
         atualizar_status_arquivo("Ruptura por pedido (CORA)", "❌ ERRO", f"{type(e).__name__}: {str(e)[:180]}")
+    # libera os intermediários dos blocos 1b–1d antes de processar_pedidos (o passo mais pesado)
+    dia_df = out_an = an = vv = g = ped = rp = comp = base = faltas = None
+    import gc as _gc; _gc.collect()
 
     # ── 1) PEDIDOS → formato Promax 03014701 → processar_pedidos (todas as análises) ──
     dd = lambda s: s.dt.strftime("%d/%m/%Y").fillna("")
