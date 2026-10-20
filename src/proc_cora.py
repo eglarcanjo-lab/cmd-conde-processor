@@ -2,7 +2,7 @@
 Dividido de processor.py (Auditoria out/26). processor.py reexporta tudo:
 quem faz `from processor import X` continua funcionando."""
 from proc_base import *  # noqa: F401,F403
-from proc_analises import _processar_vendas_cliente, _processar_vendas_diaria
+from proc_analises import _processar_vendas_cliente, _processar_vendas_diaria, _processar_ruptura
 from proc_cadastros import _registrar_sem_categoria
 from proc_clientes_pedidos import _montar_detalhe_pedidos, _norm_cabecalho, processar_cora, processar_pedidos
 from proc_rv import processar_volume_rv
@@ -476,7 +476,7 @@ def processar_pedidos_historico(conteudo_bytes):
     import gc
     print("📂 Import HISTÓRICO de pedidos (só tabelas mensais)...")
     COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
-                   "Nome Prod.", "Volume Entrega", "Volume Marcacao"}
+                   "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo"}
     df = ler_csv_inf(conteudo_bytes, usecols=lambda c: c.strip() in COLS_USADAS)
     df.columns = [c.strip() for c in df.columns]
     df["_setor"] = df["Setor"].apply(normalizar_setor)
@@ -506,6 +506,16 @@ def processar_pedidos_historico(conteudo_bytes):
     _processar_vendas_cliente(df); gc.collect()   # vendas_cliente_produto (por mês)
     _processar_vendas_diaria(df);  gc.collect()   # vd_pdv / vd_produto (por mês)
     processar_volume_rv(df);       gc.collect()   # rv_volume (por mês)
+    # Ruptura (faltas) dos meses do PROMAX — só meses antes da virada p/ o CORA (os do CORA
+    # vêm do import do CORA e não podem ser sobrescritos por um arquivo antigo).
+    if "Motivo" in df.columns:
+        try:
+            _hist = df[df["_data"].dt.strftime("%Y-%m") < CORA_INICIO]
+            if not _hist.empty:
+                _processar_ruptura(_hist)
+        except Exception as e:
+            print(f"  ⚠️ ruptura (histórico): {e}")
+        gc.collect()
 
     # Registra SKUs novos (dos arquivos históricos) na produtos_base, preservando as
     # categorias já cadastradas — os sem categoria caem em "Produtos sem categoria"

@@ -110,7 +110,7 @@ def _processar_ruptura(df):
 
     df_falta = df[df["Motivo"].astype(str).str.upper().str.contains("FALTA", na=False)].copy()
     if df_falta.empty:
-        sobrescrever_aba("ruptura_detalhe", pd.DataFrame(columns=cols))
+        # acumula por mês: arquivo sem falta NÃO apaga os meses já gravados
         print("  📉 ruptura: nenhuma falta registrada")
         return
 
@@ -136,8 +136,10 @@ def _processar_ruptura(df):
         .sort_values(["mes", "volume_falta_hl"], ascending=[True, False])
     )
     det["volume_falta_hl"] = det["volume_falta_hl"].round(3)
-    sobrescrever_aba("ruptura_detalhe", det[cols])
-    print(f"  📉 ruptura_detalhe: {len(det)} ocorrências")
+    # ACUMULA POR MÊS (antes sobrescrevia a tabela inteira → o CORA, que só traz out/26 em
+    # diante, apagava os meses do Promax e o quadrimestre ficava só com outubro).
+    sobrescrever_por_mes("ruptura_detalhe", det[cols], "mes")
+    print(f"  📉 ruptura_detalhe: {len(det)} ocorrências · meses {sorted(det['mes'].unique())}")
 
 
 
