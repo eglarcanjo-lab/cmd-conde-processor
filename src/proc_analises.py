@@ -276,6 +276,15 @@ def _processar_cobertura(df, df_clientes, hoje):
 
     df_cob = pd.DataFrame(linhas)
     sobrescrever_aba("cobertura", df_cob)
+    # Diagnóstico em Admin › Arquivos: quantos de cada status (e se o histórico M-3..M-1 entrou)
+    try:
+        cont = df_cob["status"].value_counts().to_dict()
+        n_hist = sum(1 for k, ms in bought.items() if any(m in ms for m in (m3, m2, m1)))
+        atualizar_status_arquivo("Cobertura (status)", "✅ OK",
+            " · ".join(f"{k} {cont.get(k, 0)}" for k in ("OK", "EST", "PEND", "IST", "NOK"))
+            + f" · histórico {m3:%m}–{m1:%m/%Y}: {n_hist} PDV×categoria com compra")
+    except Exception as e:
+        print(f"  ⚠️ status cobertura: {e}")
 
     # Resumo por setor x categoria
     resumo = df_cob.groupby(["setor", "categoria", "status"]).size().reset_index(name="qtd")
