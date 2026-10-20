@@ -183,33 +183,61 @@ def _processar_nota_itens(df):
 
 
 def _processar_cobertura(df, df_clientes, hoje):
-    """Gera cobertura por PDV x Categoria com status baseado no TRIMESTRE civil:
-      OK  = comprou no mês ATUAL (coberto).
-      EST = comprou em TODOS os meses anteriores do tri, mas não no atual (escorregando).
-      IST = comprou em ALGUM mês anterior do tri (mas não todos) e não no atual.
-      NOK = não comprou em NENHUM mês do tri (não comprador no trimestre).
-    Requer o `df` com os meses do tri (o arquivo de pedidos costuma trazer ~4 meses)."""
+    """Gera cobertura por PDV x Categoria olhando o mês ATUAL (M) e os 3 meses ANTERIORES
+    corridos (M-3, M-2, M-1) — v3.109 (antes: trimestre civil, que no 1º mês do tri não tinha
+    mês anterior e jogava todo mundo em NOK):
+      OK   = comprou no mês atual.
+      EST  = estável: comprou nos 3 meses anteriores (em sequência), mas não no atual.
+      PEND = pendente: comprou no mês passado (M-1), mas não no atual.
+      IST  = instável: comprou em algum dos 3 anteriores, mas não no mês passado — ou comprou
+             com buraco (mês sim, mês não: M-3 sim · M-2 não · M-1 sim).
+      NOK  = não comprou em nenhum dos 3 meses anteriores nem no atual.
+    Os meses anteriores vêm de vendas_cliente_produto (acumula por mês — o CORA só traz o mês
+    atual); o mês atual (e o que mais vier no arquivo) vem do próprio `df`."""
     cats = list(CATEGORIAS_VALIDAS)
     _codn = lambda x: (str(x).strip().lstrip("0") or "0")
 
-    # Trimestre civil (jan-mar, abr-jun, …) até o mês atual.
-    tri_ini = ((hoje.month - 1) // 3) * 3 + 1
-    meses_tri = [date(hoje.year, tri_ini + k, 1) for k in range(3) if tri_ini + k <= hoje.month]
     mes_atual_d = date(hoje.year, hoje.month, 1)
-    prior = [m for m in meses_tri if m != mes_atual_d]
-    n_prior = len(prior)
-    tri_periods = set(pd.Period(m, freq="M") for m in meses_tri)
+    def _mes_menos(k):
+        y, m = hoje.year, hoje.month - k
+        while m <= 0:
+            m += 12; y -= 1
+        return date(y, m, 1)
+    m3, m2, m1 = _mes_menos(3), _mes_menos(2), _mes_menos(1)
+    janela = {m3, m2, m1, mes_atual_d}
 
-    # bought[(cod_pdv, cat)] = set de meses (1º dia) comprados no tri (volume > 0).
-    _per = df["_data"].dt.to_period("M")
-    dft = df[_per.isin(tri_periods) & (df["_volume"] > 0)].copy()
-    dft["_m1"] = dft["_data"].dt.to_period("M").dt.to_timestamp().dt.date
     from collections import defaultdict
-    bought = defaultdict(set)
-    for _, row in dft.iterrows():
-        cod = _codn(row["_cod_pdv"])
-        for cat in (row.get("_categorias") or []):
-            bought[(cod, cat)].add(row["_m1"])
+    bought = defaultdict(set)   # (cod_pdv, cat) → meses (1º dia) com compra (volume > 0)
+
+    # 1) do arquivo (mês atual; arquivos do Promax trazem ~4 meses)
+    _m1s = df["_data"].dt.to_period("M").dt.to_timestamp().dt.date
+    dft = df[_m1s.isin(janela) & (df["_volume"] > 0)]
+    for cod_raw, cats_row, mref in zip(dft["_cod_pdv"], dft["_categorias"], _m1s[dft.index]):
+        cod = _codn(cod_raw)
+        for cat in (cats_row or []):
+            bought[(cod, cat)].add(mref)
+
+    # 2) meses anteriores do histórico acumulado (vendas_cliente_produto) × categorias da base
+    try:
+        meses_ant = [m.strftime("%Y-%m") for m in (m3, m2, m1)]
+        hist = ler_aba_meses("vendas_cliente_produto", "mes_referencia", meses_ant,
+                             ["cod_pdv", "cod_produto", "mes_referencia", "volume_hl"])
+        if not hist.empty:
+            base_p = ler_aba("produtos_base")
+            mapa = carregar_base_produtos(base_p) if not base_p.empty else {}
+            hist = hist[pd.to_numeric(hist["volume_hl"], errors="coerce").fillna(0) > 0]
+            for cod_raw, prod, mes in zip(hist["cod_pdv"], hist["cod_produto"], hist["mes_referencia"]):
+                cats_p = mapa.get(str(prod).strip().replace(".0", "").lstrip("0") or "0") or []
+                if not cats_p:
+                    continue
+                y, mo = str(mes)[:7].split("-")
+                md = date(int(y), int(mo), 1)
+                cod = _codn(cod_raw)
+                for cat in cats_p:
+                    bought[(cod, cat)].add(md)
+            print(f"  📚 cobertura: histórico {meses_ant} — {len(hist)} linhas")
+    except Exception as e:
+        print(f"  ⚠️ cobertura: histórico dos meses anteriores não lido ({e}) — só o arquivo")
 
     # Base de PDVs vem da base de clientes (fallback: os PDVs do tri).
     if df_clientes is not None and not df_clientes.empty:
@@ -222,12 +250,14 @@ def _processar_cobertura(df, df_clientes, hoje):
         bm = bought.get((cod, cat), ())
         if mes_atual_d in bm:
             return "OK"
-        np_ = sum(1 for m in prior if m in bm)
-        if np_ == 0:
-            return "NOK"
-        if n_prior > 0 and np_ == n_prior:
-            return "EST"
-        return "IST"
+        b3, b2, b1 = m3 in bm, m2 in bm, m1 in bm
+        if not (b3 or b2 or b1):
+            return "NOK"                      # nada nos 3 anteriores nem no atual
+        if b3 and b2 and b1:
+            return "EST"                      # comprou em sequência nos 3 anteriores
+        if b1 and not (b3 and not b2):
+            return "PEND"                     # comprou no mês passado (sem buraco antes)
+        return "IST"                          # não comprou no mês passado, ou mês sim/mês não
 
     linhas = []
     for _, pdv in pdvs.iterrows():

@@ -11,7 +11,7 @@ from datetime import datetime, date
 
 from categorias import resolver_categoria, carregar_base_produtos, CATEGORIAS_VALIDAS
 
-from sheets_service import ler_aba, sobrescrever_aba, sobrescrever_por_mes, atualizar_status_arquivo
+from sheets_service import ler_aba, ler_aba_meses, sobrescrever_aba, sobrescrever_por_mes, atualizar_status_arquivo
 
 
 # Setores válidos da CMD Conde

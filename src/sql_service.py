@@ -52,6 +52,30 @@ def ler_aba(nome_aba):
     return df
 
 
+def ler_aba_meses(nome_aba, col_mes, meses, colunas=None):
+    """Lê SÓ as linhas dos meses pedidos (e só as colunas pedidas) — p/ tabelas que acumulam
+    por mês (ex.: vendas_cliente_produto) sem carregar o histórico inteiro na memória."""
+    if not meses:
+        return pd.DataFrame()
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        sel = ", ".join('"%s"' % c for c in colunas) if colunas else "*"
+        cur.execute('SELECT %s FROM "%s" WHERE "%s" = ANY(%%s)' % (sel, nome_aba, col_mes), (list(meses),))
+        cols = [d[0] for d in cur.description]
+        rows = cur.fetchall()
+    except Exception as e:
+        print(f"  ⚠️ ler_aba_meses({nome_aba}): {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
+    df = pd.DataFrame(rows, columns=cols)
+    for c in df.columns:
+        if c.lower() in NAO_NUMERICAS:
+            df[c] = df[c].apply(lambda x: "" if x is None else str(x))
+    return df
+
+
 def _to_param(x):
     if x is None:
         return None
