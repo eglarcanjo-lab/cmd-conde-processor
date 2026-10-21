@@ -354,8 +354,26 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     ft["_num_pedido"] = t("Número pedido").loc[ft.index].str.lstrip("0")
     ft["_cod_pdv"] = t("Cód. cliente").loc[ft.index].str.lstrip("0")
     ft["_nome_pdv"] = t("Nome cliente").loc[ft.index]
-    base_f = ft[["_setor", "_cod_pdv", "_nome_pdv", "_num_pedido"]].drop_duplicates()
-    sobrescrever_aba("faturados_detalhe", _montar_detalhe_pedidos(base_f[base_f["_num_pedido"] != ""]))
+    # faturados_detalhe (aba Faturados × Buffer) = NFs da ÚLTIMA data de emissão do arquivo — o
+    # mesmo que o faturista manda no PDF "FATURADAS" (conferido em 21/10/2026: 235 NFs · 247
+    # pedidos · 130 PDVs). Volume = HL dos itens ATENDIDOS (FALTA não vai na NF), por
+    # pedido × operação, direto do CORA (antes: o mês inteiro + volume da pedido_chave do Promax).
+    d_emis = pd.to_datetime(t("Data emissão NF").loc[ft.index], format="%d/%m/%Y", errors="coerce")
+    ult = d_emis.max()
+    fd = ft[(d_emis == ult) & (df.loc[ft.index, "_atend_item"] == "ATENDIDO") & (ft["_num_pedido"] != "")].copy()
+    if fd.empty:
+        det_f = pd.DataFrame(columns=["setor", "cod_pdv", "nome_pdv", "num_pedido", "tipo_operacao", "volume_marcacao"])
+    else:
+        fd["_oper"] = t("Desc. operação").loc[fd.index]
+        det_f = (fd.groupby(["_num_pedido", "_oper"], as_index=False)
+                   .agg(setor=("_setor", "first"), cod_pdv=("_cod_pdv", "first"), nome_pdv=("_nome_pdv", "first"),
+                        volume_marcacao=("_hl", "sum"))
+                   .rename(columns={"_num_pedido": "num_pedido", "_oper": "tipo_operacao"}))
+        det_f["volume_marcacao"] = det_f["volume_marcacao"].round(3)
+        det_f = det_f[["setor", "cod_pdv", "nome_pdv", "num_pedido", "tipo_operacao", "volume_marcacao"]]
+    sobrescrever_aba("faturados_detalhe", det_f)
+    res["faturados_dia"] = (f"emissão {ult.strftime('%d/%m/%Y')}: {det_f['num_pedido'].nunique()} pedidos · "
+                            f"{det_f['volume_marcacao'].sum():,.1f} HL") if pd.notna(ult) else "sem NF"
     if not ft.empty:
         ft["_nf"] = t("Número NF").loc[ft.index].str.lstrip("0")
         ft["_vnf"] = _num_br(t("Valor total NF").loc[ft.index])
@@ -366,7 +384,7 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         fnf["valor"] = fnf["valor"].round(2)
         sobrescrever_aba("faturado_nf", fnf)
         res["faturados"] = f"{len(fnf)} NFs · R$ {fnf['valor'].sum():,.2f}"
-    atualizar_status_arquivo("030237 (Faturados)", "✅ OK", f"CORA · {res.get('faturados', '0 NFs')}")
+    atualizar_status_arquivo("030237 (Faturados)", "✅ OK", f"CORA · {res.get('faturados', '0 NFs')} · Faturados×Buffer = {res.get('faturados_dia', '—')}")
 
     # ── 4) FATURAMENTO MARKETPLACE → rv_faturamento_mktp (R$ sem ADF, por setor × mês) ──
     df_prods = ler_aba("produtos_base")
