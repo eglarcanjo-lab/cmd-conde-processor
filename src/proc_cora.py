@@ -19,7 +19,7 @@ from proc_rv import processar_volume_rv
 #   • Volume = Volume hectolitro (CS), lançado no DIA DE EMISSÃO DA NF (EB). Sem NF → entrega − 1 dia (D+1 = venda do dia).
 #   • Devolução = Situação pedido FATURADO_NF_DEVOLVIDA; motivo = código (EH) → tabela de motivos;
 #     código desconhecido vira ocorrência (motivos_devolucao_pendentes) p/ cadastrar.
-#   • Buffer = Tipo buffer (W) = REPROGRAMADO.
+#   • Buffer = Tipo buffer (W) = REPROGRAMADO e Situação pedido = AGUARDANDO_ROTEIRIZACAO.
 #   • Proteção de mês: só são gravados os meses que o arquivo COBRE (há entregas no mês, col D).
 #     NF de um mês não coberto (ex.: NF 30/09 entregue 01/10 num arquivo só de outubro) é
 #     ignorada — senão o import apagaria o mês anterior inteiro (as tabelas substituem por mês).

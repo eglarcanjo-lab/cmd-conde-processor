@@ -569,8 +569,12 @@ def processar_cora(conteudo_bytes):
     df["_data_entrega"] = pd.to_datetime(df["data_entrega"].astype(str).str.strip(),
                                          format="%d/%m/%Y", errors="coerce")
 
-    # ── 1) BUFFER — 'Tipo buffer' = REPROGRAMADO (regra out/2026), setor válido ──
-    buf = df[(df["_tipo_buffer"].str.upper() == "REPROGRAMADO") & (df["_setor"].isin(SETORES_VALIDOS)) & (df["_num_pedido"] != "")].copy()
+    # ── 1) BUFFER — 'Tipo buffer' = REPROGRAMADO E 'Situação pedido' = AGUARDANDO_ROTEIRIZACAO
+    #    (o que ainda está parado). Só REPROGRAMADO pegava o mês inteiro (já entregues,
+    #    devolvidos, em rota…) → ~2.700 HL. Conferido c/ o PDF do faturista em 21/10/2026:
+    #    316,79 HL · 202 PDVs, batendo por setor.
+    buf = df[(df["_tipo_buffer"].str.upper() == "REPROGRAMADO") & (df["_situacao"] == "AGUARDANDO_ROTEIRIZACAO") &
+             (df["_setor"].isin(SETORES_VALIDOS)) & (df["_num_pedido"] != "")].copy()
     if buf.empty:
         det_buf = pd.DataFrame(columns=["setor", "cod_pdv", "nome_pdv", "num_pedido", "tipo_operacao", "volume_marcacao"])
     else:
