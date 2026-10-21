@@ -712,11 +712,28 @@ def processar_portfolio_ideal(conteudo_bytes, mes_ref=None):
         df["_bateu"]         = df["BATEU META"].astype(str).str.strip() == "1"
         df["_faltantes_str"] = df["_faltantes"].apply(lambda x: ", ".join(x) if x else "—")
 
+        # Farol matinal (KPI 18): categorias com meta e SKUs (colunas de real) já comprados,
+        # p/ a tabela "check" do que o PDV já comprou × o que falta. Ex.: metas "600|LN",
+        # comprados "COR LN|STL 600" (nomes das colunas do relatório, sem o _dup1).
+        def _metas(row):
+            return "|".join(c for c in COLS_META_PI
+                            if str(row.get(c, "")).strip() not in ("", "nan", "0", "None", "NaN"))
+        def _comprados(row):
+            seg = "HE" if "HIGH END" in str(row.get("BASE", "")).strip().upper() else "CORE"
+            cols = []
+            for cat in COLS_META_PI:
+                for c in MAPA_CATEGORIA_REAL.get(cat, {}).get(seg, []):
+                    if c in row.index and _to_int(row.get(c, 0)) > 0:
+                        cols.append(c.replace("_dup1", ""))
+            return "|".join(dict.fromkeys(cols))
+        df["_metas"] = df.apply(_metas, axis=1)
+        df["_comprados"] = df.apply(_comprados, axis=1)
+
         # ── Detalhe ──────────────────────────────────────────────────────────
         df_det = df[["_cod_pdv","NOME PDV","setor","gv","BASE","VISITA",
-                     "dia_visita","_bateu","_faltantes_str"]].copy()
+                     "dia_visita","_bateu","_faltantes_str","_metas","_comprados"]].copy()
         df_det.columns = ["cod_pdv","nome_pdv","setor","gv","base","dia_rota",
-                          "dia_visita","portfolio_ideal","itens_faltantes"]
+                          "dia_visita","portfolio_ideal","itens_faltantes","categorias_meta","skus_comprados"]
         df_det["portfolio_ideal"] = df_det["portfolio_ideal"].map({True:"SIM", False:"NÃO"})
         df_det["mes_referencia"]  = mes_ref
         sobrescrever_aba("spo_portfolio_ideal_detalhe", df_det)

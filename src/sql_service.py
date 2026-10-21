@@ -132,6 +132,9 @@ def sobrescrever_por_mes(nome_aba, df, col_mes):
         cols_sql = ", ".join('"%s"' % c for c in cols_l)
         defs = ", ".join('"%s" TEXT' % c for c in cols_l) or '"_vazio" TEXT'
         cur.execute('CREATE TABLE IF NOT EXISTS "%s" (%s)' % (nome_aba, defs))
+        # Coluna nova no df (tabela antiga, criada sem ela) → cria antes do INSERT.
+        for c in cols_l:
+            cur.execute('ALTER TABLE "%s" ADD COLUMN IF NOT EXISTS "%s" TEXT' % (nome_aba, c))
         cm = col_mes.lower()
         meses = sorted({str(m).strip() for m in df[col_mes].dropna().tolist() if str(m).strip()}) if col_mes in df.columns else []
         if meses:

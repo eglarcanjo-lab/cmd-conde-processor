@@ -57,17 +57,20 @@ def _processar_vendas_cliente(df_mes):
     # Import mensal: cada linha recebe o mês REAL do dado (não "hoje"), p/ acumular
     # por mês no SQL. Agrupa por setor x pdv x produto x MÊS.
     df_v["_mes"] = df_v["_data"].dt.strftime("%Y-%m")
+    # ultima_compra (dd/mm/aaaa): último dia com compra do produto no mês — farol matinal
+    # (Score 5: "há quanto tempo o PDV não compra o que mais compra").
     g = (
-        df_v.groupby(["_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod.", "_mes"])["_vol_efetivo"]
-        .sum().reset_index()
+        df_v.groupby(["_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod.", "_mes"])
+        .agg(volume_hl=("_vol_efetivo", "sum"), _ult=("_data", "max")).reset_index()
         .rename(columns={
             "_setor": "setor", "_cod_pdv": "cod_pdv", "Nome Cliente": "nome_pdv",
-            "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto",
-            "_vol_efetivo": "volume_hl", "_mes": "mes_referencia",
+            "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto", "_mes": "mes_referencia",
         })
         .sort_values(["mes_referencia", "setor", "volume_hl"], ascending=[True, True, False])
     )
     g["volume_hl"] = g["volume_hl"].round(3)
+    g["ultima_compra"] = g["_ult"].dt.strftime("%d/%m/%Y")
+    g = g.drop(columns=["_ult"])
     # Acumula: substitui só os meses presentes neste arquivo, mantém os demais.
     sobrescrever_por_mes("vendas_cliente_produto", g, "mes_referencia")
     print(f"  🤖 vendas_cliente_produto (Hop): {len(g)} linhas, meses {sorted(g['mes_referencia'].unique())}")
