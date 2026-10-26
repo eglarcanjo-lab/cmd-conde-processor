@@ -38,6 +38,55 @@ MOTIVOS_DEVOLUCAO_PADRAO = {
 
 
 
+_CORA_USADAS = {
+    "Número pedido",
+    "Número pedido cliente",
+    "Data entrega",
+    "CPF/CNPJ cliente",
+    "Cód. cliente",
+    "Nome cliente",
+    "Nome fantasia",
+    "Tipo pedido",
+    "ID do pedido",
+    "Situação pedido",
+    "Situação atend. pedido",
+    "Motivo cancelamento",
+    "Data entrada",
+    "Canal origem",
+    "Canal marcação",
+    "Desc. município",
+    "Usuário digitação",
+    "Motivo digitação",
+    "Cód. operação",
+    "Desc. operação",
+    "Desc. tipo movimento",
+    "Forma de pagamento",
+    "Cód. setor",
+    "Desc. setor",
+    "Cód. vendedor",
+    "Nome vendedor",
+    "Condição de pagamento",
+    "Cód. produto",
+    "Desc. produto",
+    "Quant. venda",
+    "Unidade venda",
+    "Valor unitário líquido",
+    "Valor líquido item",
+    "Valor sem ADF",
+    "Volume hectolitro",
+    "Situação item",
+    "Situação atend. item",
+    "Motivo corte",
+    "Placa",
+    "Número NF",
+    "Data emissão NF",
+    "Itinerário",
+    "Valor total NF",
+    "Data devol./cancel. NF",
+    "Motivo devol./cancel. NF",
+}
+
+
 def _motivos_devolucao():
     """Código → descrição: padrão + os cadastrados no app (tabela motivos_devolucao)."""
     m = dict(MOTIVOS_DEVOLUCAO_PADRAO)
@@ -66,7 +115,9 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     vinham de relatórios separados do Promax. Retorna um resumo por rotina."""
     import io as _io
     print("📂 Processando CORA completo (consulta-pedidos)...")
-    df = ler_csv_inf(conteudo_bytes)
+    # MEMÓRIA (Render free 512MB): o CSV tem ~142 colunas; carrega só as ~45 usadas.
+    # Coluna nova lida neste arquivo → incluir em _CORA_USADAS (senão vira série vazia).
+    df = ler_csv_inf(conteudo_bytes, usecols=lambda c: str(c).strip() in _CORA_USADAS)
     df.columns = [str(c).strip() for c in df.columns]
     obrig = ["Número pedido", "Data entrega", "Cód. cliente", "Situação pedido", "Situação atend. item",
              "Cód. operação", "Cód. setor", "Cód. produto", "Volume hectolitro", "Data emissão NF", "Número NF"]
@@ -409,6 +460,9 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     atualizar_status_arquivo("030509 (Faturamento Mktp)", "✅ OK", f"CORA · {res['faturamento_mktp']}")
 
     # ── 5) BUFFER + DECK (rotina existente; lê o mesmo arquivo) ──────────────────────
+    # libera o df principal antes de reler o arquivo (senão os dois somam no pico de memória)
+    df = v = vm = ped = ft = fd = None
+    import gc as _gc2; _gc2.collect()
     d_bd = processar_cora(conteudo_bytes)
     res["buffer_deck"] = f"buffer {d_bd['num_pedido'].nunique() if len(d_bd) else 0} pedidos"
     atualizar_status_arquivo("CORA (Consulta-pedidos completo)", "✅ OK", " · ".join(f"{k}: {v}" for k, v in res.items()))

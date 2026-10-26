@@ -48,12 +48,15 @@ def ler_csv_inf(conteudo_bytes, usecols=None):
     (reduz drasticamente a memória em arquivos largos, ex: pedidos 71 colunas)."""
     enc = detectar_encoding(conteudo_bytes)
     try:
-        texto = conteudo_bytes.decode(enc, errors="replace")
+        "".encode(enc)
     except Exception:
-        texto = conteudo_bytes.decode("latin-1", errors="replace")
+        enc = "latin-1"
+    # Lê direto dos bytes (sem decodificar o arquivo inteiro numa string — no CORA isso
+    # custava ~200MB de pico no Render free 512MB).
     # index_col=False: impede que pandas use a 1ª coluna de dados como índice
     # quando o CSV tem ponto-e-vírgula no final de cada linha (campo extra vazio).
-    return pd.read_csv(io.StringIO(texto), sep=";", dtype=str, low_memory=False, index_col=False, usecols=usecols)
+    return pd.read_csv(io.BytesIO(conteudo_bytes), sep=";", dtype=str, low_memory=False, index_col=False,
+                       usecols=usecols, encoding=enc, encoding_errors="replace")
 
 
 
