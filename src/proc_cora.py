@@ -165,6 +165,10 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     CANCEL = {"CANCELADO", "FATURADO_NF_DEVOLVIDA", "FATURADO_NF_CANCELADA"}
     df["_venda"] = ((df["_op"] == "1") & (df["_atend_item"] == "ATENDIDO") &
                     ~df["_sit_item"].isin(CANCEL) & ~df["_sit_ped"].isin(CANCEL))
+    # Bonificação de combo (bala/pirulito de brinde): conta como COMPRA do PDV (cobertura e
+    # distribuição, pela quantidade) mas NÃO entra em volume (Volume Entrega segue só venda).
+    df["_bonif"] = ((t("Desc. operação").str.upper() == "BONIF DES BALZ/COMBO") & (df["_atend_item"] == "ATENDIDO") &
+                    ~df["_sit_item"].isin(CANCEL) & ~df["_sit_ped"].isin(CANCEL))
     df["_devolvido"] = df["_sit_ped"] == "FATURADO_NF_DEVOLVIDA"
     motivos = _motivos_devolucao()
     df["_cod_motivo"] = t("Motivo devol./cancel. NF").str.lstrip("0")   # "0" = sem motivo → ""
@@ -386,7 +390,12 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         "Volume Marcacao":    fmt(df["_hl"]),
         "Volume Entrega":     fmt(df["_hl"].where(df["_venda"], 0.0)),
         "Qtde Marcacao":      fmt(df["_qtd"]),
-        "Qtde Entrega":       fmt(df["_qtd"].where(df["_venda"], 0.0)),
+        # Rastreio (Pesquisa Pedido): operação do item e HL ENTREGUE de qualquer operação atendida
+        # (bonificação/remessa não são venda, mas foram entregues — senão aparecem como ruptura falsa).
+        "Operacao":           t("Desc. operação").loc[df.index],
+        "HL Atendido":        fmt(df["_hl"].where((df["_atend_item"] == "ATENDIDO") & ~df["_sit_item"].isin(CANCEL)
+                                                  & ~df["_sit_ped"].isin(CANCEL), 0.0)),
+        "Qtde Entrega":       fmt(df["_qtd"].where(df["_venda"] | df["_bonif"], 0.0)),
         "Motivo":             df["_desc_motivo"].where(df["_devolvido"],
                                   pd.Series("Pedido Normal", index=df.index).where(df["_atend_item"] != "FALTA", "FALTA")),
         "Desc Tipo Movimento": t("Desc. tipo movimento").loc[df.index].str.upper(),

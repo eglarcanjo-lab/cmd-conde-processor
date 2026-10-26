@@ -158,6 +158,7 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
                    "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo",
                    "Qtde Entrega", "Qtde Marcacao",   # só no CORA (itens com 0 HL: balas, Halls…)
+                   "Operacao", "HL Atendido",          # só no CORA (rastreio da Pesquisa Pedido)
                    "Desc Tipo Movimento", "Nota Fiscal",
                    # rastreabilidade do pedido BEES (Pesquisa Pedido)
                    "Pedido Cliente", "Pedido", "Nome Setor", "Mapa", "Entrega Real"}
@@ -305,7 +306,11 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
                 "entrega_real": df["Entrega Real"].astype(str).str.strip() if "Entrega Real" in df.columns else "",
                 "motivo":       _mot,
                 "hl_marcacao":  df["_volume_marcacao"],
-                "hl_entrega":   df["_volume"],
+                # CORA: HL de qualquer item ATENDIDO (venda, bonificação, remessa…) — rastreio
+                # mostra o que foi entregue; Promax: Volume Entrega (como antes).
+                "hl_entrega":   (pd.to_numeric(df["HL Atendido"].astype(str).str.replace(",", ".", regex=False).str.strip(),
+                                               errors="coerce").fillna(0.0) if "HL Atendido" in df.columns else df["_volume"]),
+                "operacao":     df["Operacao"].astype(str).str.strip().replace("nan", "") if "Operacao" in df.columns else "",
             })
             pb = pb[pb["bees"] != ""]
             if not pb.empty:
@@ -331,8 +336,9 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
                     "nome_produto": df.loc[pb.index, "Nome Prod."].astype(str).str.strip(),
                     "hl_marcacao":  pb["hl_marcacao"],
                     "hl_entrega":   pb["hl_entrega"],
+                    "operacao":     pb["operacao"],
                 })
-                it = (it.groupby(["bees", "cod_produto", "nome_produto"], as_index=False)
+                it = (it.groupby(["bees", "cod_produto", "nome_produto", "operacao"], as_index=False)
                         .agg(hl_marcacao=("hl_marcacao", "sum"), hl_entrega=("hl_entrega", "sum"))
                         .sort_values(["bees", "hl_marcacao"], ascending=[True, False]))
                 it["hl_marcacao"] = it["hl_marcacao"].round(3)
