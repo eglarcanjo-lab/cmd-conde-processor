@@ -34,6 +34,16 @@ def _processar_vendas_diaria(df):
 
 
 
+def _comprou(df):
+    """Item que o PDV levou: volume entregue > 0 OU quantidade entregue > 0 (CORA). Bala, Halls
+    e Trident chegam com 0,00 HL; bonificação de combo vem com volume 0 e quantidade. Cobertura
+    e distribuição contam; métricas de VOLUME continuam filtrando _volume > 0."""
+    m = df["_volume"] > 0
+    if "_qtd" in df.columns:
+        m = m | (df["_qtd"] > 0)
+    return m
+
+
 def _processar_vendas_cliente(df_mes):
     """Vendas do mês por setor x cliente x produto. Base da assistente Hop e da
     Cobertura & Distribuição por SKU.
@@ -221,7 +231,7 @@ def _processar_cobertura(df, df_clientes, hoje):
 
     # 1) do arquivo (mês atual; arquivos do Promax trazem ~4 meses)
     _m1s = df["_data"].dt.to_period("M").dt.to_timestamp().dt.date
-    dft = df[_m1s.isin(janela) & (df["_volume"] > 0)]
+    dft = df[_m1s.isin(janela) & _comprou(df)]
     for cod_raw, cats_row, mref in zip(dft["_cod_pdv"], dft["_categorias"], _m1s[dft.index]):
         cod = _codn(cod_raw)
         for cat in (cats_row or []):
@@ -235,7 +245,8 @@ def _processar_cobertura(df, df_clientes, hoje):
         if not hist.empty:
             base_p = ler_aba("produtos_base")
             mapa = carregar_base_produtos(base_p) if not base_p.empty else {}
-            hist = hist[pd.to_numeric(hist["volume_hl"], errors="coerce").fillna(0) > 0]
+            # linha em vendas_cliente_produto já é compra (volume > 0 ou quantidade > 0 — v3.121)
+            hist = hist[pd.to_numeric(hist["volume_hl"], errors="coerce").fillna(0) >= 0]
             for cod_raw, prod, mes in zip(hist["cod_pdv"], hist["cod_produto"], hist["mes_referencia"]):
                 cats_p = mapa.get(str(prod).strip().replace(".0", "").lstrip("0") or "0") or []
                 if not cats_p:
@@ -307,7 +318,7 @@ def _processar_cobertura(df, df_clientes, hoje):
 
 def _processar_mix(df_4m):
     """Top 5 produtos mais pedidos por PDV nos últimos 4 meses."""
-    df_v = df_4m[df_4m["_volume"] > 0].copy()
+    df_v = df_4m[_comprou(df_4m)].copy()
     mix = (
         df_v.groupby(["_setor", "_cod_pdv", "Cod. Prod.", "Nome Prod.", "_categoria"])
         ["_volume"].sum()
