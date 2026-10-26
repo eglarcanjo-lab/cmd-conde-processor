@@ -157,6 +157,7 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     # Isso derruba o pico de memória de ~255MB para ~35MB — essencial no Render free.
     COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
                    "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo",
+                   "Qtde Entrega", "Qtde Marcacao",   # só no CORA (itens com 0 HL: balas, Halls…)
                    "Desc Tipo Movimento", "Nota Fiscal",
                    # rastreabilidade do pedido BEES (Pesquisa Pedido)
                    "Pedido Cliente", "Pedido", "Nome Setor", "Mapa", "Entrega Real"}
@@ -214,6 +215,13 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
           .astype(str).str.replace(",", ".", regex=False).str.strip(),
         errors="coerce"
     ).fillna(0.0)
+
+    # Quantidade vendida (só o CORA manda). Mantém em vendas_cliente_produto os itens de
+    # marketplace que pesam 0,00 HL (bala, pirulito, Halls…) — senão nunca contam como
+    # distribuição/cobertura. Promax: colunas ausentes → 0 (comportamento antigo).
+    for _c, _dst in (("Qtde Entrega", "_qtd"), ("Qtde Marcacao", "_qtd_marcacao")):
+        df[_dst] = (pd.to_numeric(df[_c].astype(str).str.replace(",", ".", regex=False).str.strip(), errors="coerce")
+                    .fillna(0.0) if _c in df.columns else 0.0)
 
     # Normalizar cod cliente
     df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0").str.strip()

@@ -50,8 +50,15 @@ def _processar_vendas_cliente(df_mes):
     eh_hoje = d["_data_str"] == hoje_str
     d["_vol_efetivo"] = d["_volume"]
     d.loc[eh_hoje, "_vol_efetivo"] = d.loc[eh_hoje, "_volume_marcacao"]
+    # Quantidade (CORA): item vendido com 0,00 HL (bala, Halls…) também é compra do PDV.
+    if "_qtd" in df_mes.columns:
+        _q = df_mes["_qtd"]
+        _qm = df_mes["_qtd_marcacao"] if "_qtd_marcacao" in df_mes.columns else _q
+        d["_qtd_efetivo"] = _q.where(~eh_hoje, _qm)
+    else:
+        d["_qtd_efetivo"] = 0.0
 
-    df_v = d[d["_vol_efetivo"] > 0].copy()
+    df_v = d[(d["_vol_efetivo"] > 0) | (d["_qtd_efetivo"] > 0)].copy()
     if df_v.empty:
         return
     # Import mensal: cada linha recebe o mês REAL do dado (não "hoje"), p/ acumular

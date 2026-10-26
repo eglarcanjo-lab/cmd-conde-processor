@@ -135,6 +135,7 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     df["_atend_item"] = t("Situação atend. item").str.upper()
     df["_op"] = t("Cód. operação").str.lstrip("0")
     df["_hl"] = _num_br(t("Volume hectolitro"))
+    df["_qtd"] = _num_br(t("Quant. venda"))
     d_ent = pd.to_datetime(t("Data entrega"), format="%d/%m/%Y", errors="coerce")
     d_nf = pd.to_datetime(t("Data emissão NF"), format="%d/%m/%Y", errors="coerce")
     # Sem NF ainda → entrega − 1 dia (a NF sai sempre na véspera da entrega). Assim o pedido de
@@ -384,6 +385,8 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         "Nome Prod.":         nome_prod,
         "Volume Marcacao":    fmt(df["_hl"]),
         "Volume Entrega":     fmt(df["_hl"].where(df["_venda"], 0.0)),
+        "Qtde Marcacao":      fmt(df["_qtd"]),
+        "Qtde Entrega":       fmt(df["_qtd"].where(df["_venda"], 0.0)),
         "Motivo":             df["_desc_motivo"].where(df["_devolvido"],
                                   pd.Series("Pedido Normal", index=df.index).where(df["_atend_item"] != "FALTA", "FALTA")),
         "Desc Tipo Movimento": t("Desc. tipo movimento").loc[df.index].str.upper(),
