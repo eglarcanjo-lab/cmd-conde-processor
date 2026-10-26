@@ -103,6 +103,8 @@ def processar_clientes(conteudo_bytes):
             "data_prox_visita": str(row.get("Data da Prox Visita VDE", "")).strip(),
             "bairro": _txt(row.get(col_bairro, "")) if col_bairro else "",
             "categoria": _txt(row.get(col_categoria, "")) if col_categoria else "",
+            # "Data de Cadastro" (dd/mm/aaaa) — relatório Novos cadastros do mês
+            "data_cadastro": _txt(row.get("Data de Cadastro", "")),
         })
 
     df_base = pd.DataFrame(resultados)
