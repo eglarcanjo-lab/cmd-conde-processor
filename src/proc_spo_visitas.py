@@ -951,6 +951,9 @@ def processar_rotina_mais(conteudo_bytes, mes_ref=None):
         # Sem acento/case e por prefixo → cobre critico|critica, mediano|mediana, excelente.
         df["_cl"]  = df[c_cl].apply(_norm)
         g = df[df["_gps"] == "OK"].copy()
+        if g.empty:
+            raise ValueError(f"Nenhuma visita com GPS = OK ({len(df)} linhas de setor válido). "
+                             f"Valores de GPS no arquivo: {sorted(df['_gps'].unique().tolist())[:10]}")
 
         def _linha(setor, sub):
             base = len(sub)
@@ -995,10 +998,12 @@ def processar_rotina_mais(conteudo_bytes, mes_ref=None):
         print(f"  ✅ Rotina+: {op['pct_med_exc']}% operação Med+Exc ({op['visitas']} visitas GPS OK)")
         return pd.DataFrame(resumo)
     except Exception as e:
+        # Repassa o erro: antes o import mostrava ✅ sem gravar nada (farol/SPO ficavam sem Rotina+).
         import traceback
         traceback.print_exc()
+        atualizar_status_arquivo("SPO - Rotina+", "❌ ERRO", str(e)[:200])
         print(f"  ❌ Erro: {e}")
-        return pd.DataFrame()
+        raise
 
 
 
