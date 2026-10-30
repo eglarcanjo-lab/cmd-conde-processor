@@ -94,13 +94,32 @@ def _processar_vendas_cliente(df_mes):
 
 
 
+# Categorias MÃE (devoluções por categoria): Cerveja · NAB · Match · Mktp · RGB TT.
+# Produto entra 1x em cada mãe que tiver (RGB TT também é Cerveja); sem nenhuma → "OUTROS".
+# RGB TT = GIRO RGB + LITRINHO + Trimarcas RGB HE (mesmo grupo do backend utils/rgbVolume).
+_RGB_TT = {"GIRO RGB", "LITRINHO", "TRIMARCA RGB HE (ORIGINAL)", "TRIMARCA RGB HE (STELLA)", "TRIMARCA RGB HE (SPATEN)"}
+_MAE = [
+    ("CERVEJA", {"CERVEJA", "CERVEJA ZERO", "CERVEJA MULTIPACK", "HE", "HE RGB"} | _RGB_TT),
+    ("NAB", {"NAB", "NAB ZERO"}),
+    ("MATCH", {"MATCH"}),
+    ("MKTP", {"MKTP"}),
+    ("RGB TT", _RGB_TT),
+]
+
+
+def categorias_mae(cats):
+    s = {str(c).strip().upper() for c in cats} if isinstance(cats, list) else set()
+    out = [m for m, filhas in _MAE if s & filhas]
+    return out or ["OUTROS"]
+
+
 def _processar_entregas_efetivadas(df):
     """Volume entregue (efetivado) por setor x mês — denominador da taxa de
     frustração no Detalhamento HOP › Entrega. Usa Volume Entrega (faturado).
     CORA (tem "Entrega Real"): só pedido ENTREGUE — em rota / aguardando roteirização ainda
     não pode ser frustrado, não entra no denominador. Acumula por mês (substitui só os meses
-    do arquivo). entregas_efetivadas_cat = mesmo volume por categoria (produto conta em cada
-    categoria dele; sem categoria → "SEM CATEGORIA") — taxa por categoria na aba Entrega."""
+    do arquivo). entregas_efetivadas_cat = mesmo volume por categoria MÃE (categorias_mae)
+    — taxa por categoria na aba Entrega."""
     cols = ["setor", "mes_referencia", "volume_entregue_hl", "linhas"]
     df_v = df[df["_volume"] > 0].copy()
     if "Entrega Real" in df_v.columns:
@@ -122,7 +141,7 @@ def _processar_entregas_efetivadas(df):
 
     if "_categorias" in df_v.columns:
         c = df_v[["_setor", "_mes", "_volume", "_categorias"]].copy()
-        c["_categorias"] = c["_categorias"].apply(lambda x: x if isinstance(x, list) and x else ["SEM CATEGORIA"])
+        c["_categorias"] = c["_categorias"].apply(categorias_mae)
         c = c.explode("_categorias")
         gc_ = (
             c.groupby(["_setor", "_mes", "_categorias"])
