@@ -468,6 +468,18 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         fm = pd.DataFrame({"setor": ["101"] * len(meses), "mes_referencia": meses, "faturamento_mktp_real": [0.0] * len(meses)})
     fm["faturamento_mktp_real"] = fm["faturamento_mktp_real"].round(2)
     sobrescrever_por_mes("rv_faturamento_mktp", fm[["setor", "faturamento_mktp_real", "mes_referencia"]], "mes_referencia")
+    # Mesmo faturamento por DIA (data = NF ou entrega − 1) — "Vendido hoje" do Report Volumes das 12h
+    try:
+        fd_ = (vm.assign(_dia=vm["_data"].dt.strftime("%Y-%m-%d"))
+                 .groupby(["_setor", "_dia", "_mes"])["_rs"].sum().reset_index()
+                 .rename(columns={"_setor": "setor", "_dia": "data", "_mes": "mes_referencia", "_rs": "faturamento_mktp"}))
+        if fd_.empty:
+            fd_ = pd.DataFrame({"setor": ["101"] * len(meses), "data": [""] * len(meses), "mes_referencia": meses, "faturamento_mktp": [0.0] * len(meses)})
+        fd_["faturamento_mktp"] = fd_["faturamento_mktp"].round(2)
+        sobrescrever_por_mes("rv_faturamento_mktp_dia", fd_[["setor", "data", "faturamento_mktp", "mes_referencia"]], "mes_referencia")
+        fd_ = None
+    except Exception as e:
+        print(f"  ⚠️ rv_faturamento_mktp_dia: {e}")
     res["faturamento_mktp"] = f"R$ {fm['faturamento_mktp_real'].sum():,.2f} ({len(mktp)} produtos MKTP)"
     atualizar_status_arquivo("030509 (Faturamento Mktp)", "✅ OK", f"CORA · {res['faturamento_mktp']}")
 
