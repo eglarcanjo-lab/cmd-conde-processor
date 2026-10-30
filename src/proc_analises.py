@@ -97,11 +97,16 @@ def _processar_vendas_cliente(df_mes):
 def _processar_entregas_efetivadas(df):
     """Volume entregue (efetivado) por setor x mês — denominador da taxa de
     frustração no Detalhamento HOP › Entrega. Usa Volume Entrega (faturado).
-    Cobre todo o quadrimestre do arquivo para permitir análise por mês."""
+    CORA (tem "Entrega Real"): só pedido ENTREGUE — em rota / aguardando roteirização ainda
+    não pode ser frustrado, não entra no denominador. Acumula por mês (substitui só os meses
+    do arquivo). entregas_efetivadas_cat = mesmo volume por categoria (produto conta em cada
+    categoria dele; sem categoria → "SEM CATEGORIA") — taxa por categoria na aba Entrega."""
     cols = ["setor", "mes_referencia", "volume_entregue_hl", "linhas"]
     df_v = df[df["_volume"] > 0].copy()
+    if "Entrega Real" in df_v.columns:
+        er = df_v["Entrega Real"].fillna("").astype(str).str.strip()
+        df_v = df_v[~er.isin(["", "nan", "NaN", "None"])]
     if df_v.empty:
-        sobrescrever_aba("entregas_efetivadas", pd.DataFrame(columns=cols))
         return
     df_v["_mes"] = df_v["_data"].dt.strftime("%Y-%m")
     g = (
@@ -112,8 +117,21 @@ def _processar_entregas_efetivadas(df):
         .sort_values(["mes_referencia", "setor"])
     )
     g["volume_entregue_hl"] = g["volume_entregue_hl"].round(3)
-    sobrescrever_aba("entregas_efetivadas", g[cols])
-    print(f"  📦 entregas_efetivadas: {len(g)} (setor x mês)")
+    sobrescrever_por_mes("entregas_efetivadas", g[cols], "mes_referencia")
+    print(f"  📦 entregas_efetivadas: {len(g)} (setor x mês, só ENTREGUE)")
+
+    if "_categorias" in df_v.columns:
+        c = df_v[["_setor", "_mes", "_volume", "_categorias"]].copy()
+        c["_categorias"] = c["_categorias"].apply(lambda x: x if isinstance(x, list) and x else ["SEM CATEGORIA"])
+        c = c.explode("_categorias")
+        gc_ = (
+            c.groupby(["_setor", "_mes", "_categorias"])
+            .agg(volume_entregue_hl=("_volume", "sum")).reset_index()
+            .rename(columns={"_setor": "setor", "_mes": "mes_referencia", "_categorias": "categoria"})
+        )
+        gc_["volume_entregue_hl"] = gc_["volume_entregue_hl"].round(3)
+        sobrescrever_por_mes("entregas_efetivadas_cat", gc_[["setor", "mes_referencia", "categoria", "volume_entregue_hl"]], "mes_referencia")
+        print(f"  📦 entregas_efetivadas_cat: {len(gc_)} (setor x mês x categoria)")
 
 
 
@@ -169,7 +187,7 @@ def _processar_nota_itens(df):
     entregas_frustradas (mantém a aba pequena). Casa devolução.Nota com a
     coluna 'Nota Fiscal' dos pedidos.
     """
-    cols = ["nota", "cod_produto", "nome_produto", "volume_marcacao_hl", "volume_entrega_hl"]
+    cols = ["nota", "cod_produto", "nome_produto", "volume_marcacao_hl", "volume_entrega_hl", "categorias"]
     try:
         fr = ler_aba("entregas_frustradas")
     except Exception:
@@ -197,6 +215,13 @@ def _processar_nota_itens(df):
     )
     g["volume_marcacao_hl"] = g["volume_marcacao_hl"].round(3)
     g["volume_entrega_hl"] = g["volume_entrega_hl"].round(3)
+    # Categorias do produto (p/ devoluções por categoria; várias separadas por "|")
+    if "_categorias" in d.columns:
+        cat_de = (d.drop_duplicates("Cod. Prod.").set_index("Cod. Prod.")["_categorias"]
+                  .apply(lambda x: "|".join(x) if isinstance(x, list) else ""))
+        g["categorias"] = g["cod_produto"].map(cat_de).fillna("")
+    else:
+        g["categorias"] = ""
     sobrescrever_aba("nota_itens", g[cols])
     print(f"  🧾 nota_itens: {g['nota'].nunique()} notas · {len(g)} itens")
 
