@@ -575,8 +575,22 @@ def processar_pedidos_historico(conteudo_bytes):
                    "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo"}
     df = ler_csv_inf(conteudo_bytes, usecols=lambda c: c.strip() in COLS_USADAS)
     df.columns = [c.strip() for c in df.columns]
-    df["_setor"] = df["Setor"].apply(normalizar_setor)
-    df = df[df["_setor"].isin(SETORES_VALIDOS)]
+    # Setor ATUAL do cliente (não o da época): os setores de 2025 (100/107/108/110/111 antigos)
+    # foram redistribuídos. Cliente na base atual (pdv_base = ativos; pdv_fora = 102/995/997)
+    # → setor dele hoje; cliente que não existe mais → "INATIVOS" (continua somando no total).
+    df["_cod_pdv"] = df["Cliente"].astype(str).str.strip().str.lstrip("0").str.strip()
+    df = df[~df["_cod_pdv"].isin(["", "nan"])]
+    setor_atual = {}
+    for aba in ("pdv_fora", "pdv_base"):  # pdv_base por último: prevalece
+        try:
+            b = ler_aba(aba)
+            if not b.empty:
+                setor_atual.update(dict(zip(b["cod_pdv"].astype(str).str.strip().str.lstrip("0"),
+                                            b["setor"].astype(str).map(setor_hop))))
+        except Exception as e:
+            print(f"  ⚠️ {aba}: {e}")
+    df["_setor"] = df["_cod_pdv"].map(setor_atual).fillna("INATIVOS")
+    print(f"  → setor atual: {len(setor_atual)} PDVs na base · {int((df['_setor'] == 'INATIVOS').sum())} linhas de clientes INATIVOS")
     df["_data"] = pd.to_datetime(df["Data"].str.strip(), format="%d/%m/%Y", errors="coerce")
     df = df[df["_data"].notna()]
     if df.empty:
@@ -596,7 +610,6 @@ def processar_pedidos_historico(conteudo_bytes):
     df["_volume_marcacao"] = pd.to_numeric(
         df.get("Volume Marcacao", pd.Series(index=df.index, dtype=str)).astype(str)
           .str.replace(",", ".", regex=False).str.strip(), errors="coerce").fillna(0.0)
-    df["_cod_pdv"] = df["Cliente"].str.strip().str.lstrip("0").str.strip()
     gc.collect()
 
     _processar_vendas_cliente(df); gc.collect()   # vendas_cliente_produto (por mês)
