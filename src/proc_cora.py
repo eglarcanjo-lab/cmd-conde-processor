@@ -248,9 +248,12 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
             "cod_produto": ts("Cód. produto", ci).str.replace(r"\.0$", "", regex=True).str.lstrip("0").values,
             "nome_produto": ts("Desc. produto", ci).map(_txt).values,
             "situacao": df.loc[ci, "_atend_item"].replace("", "SEM_SITUACAO").values,
+            # operação do item: o painel do dia da HOP conta só 1 (venda) e 2 (bonificação), igual
+            # ao BI — troca (5), vasilhame (9), reposição (39), perda (101…) não são volume
+            "op": df.loc[ci, "_op"].values,
             "volume_hl": df.loc[ci, "_hl"].values,
         })
-        dia_df = (dia_df.groupby(["data", "setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "situacao"], as_index=False)
+        dia_df = (dia_df.groupby(["data", "setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "situacao", "op"], as_index=False)
                   ["volume_hl"].sum())
         dia_df["volume_hl"] = dia_df["volume_hl"].round(3)
         sobrescrever_aba("cora_dia", dia_df)
@@ -399,7 +402,7 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
                                                   & ~df["_sit_ped"].isin(CANCEL), 0.0)),
         "Qtde Entrega":       fmt(df["_qtd"].where(df["_venda"] | df["_bonif"], 0.0)),
         "Motivo":             df["_desc_motivo"].where(df["_devolvido"],
-                                  pd.Series("Pedido Normal", index=df.index).where(df["_atend_item"] != "FALTA", "FALTA")),
+                                  pd.Series("Pedido Normal", index=df.index).where(~((df["_atend_item"] == "FALTA") & df["_op"].isin(["1", "2"])), "FALTA")),  # ruptura = falta em venda/bonif (op 1/2)
         "Desc Tipo Movimento": t("Desc. tipo movimento").loc[df.index].str.upper(),
         "Nota Fiscal":        t("Número NF").loc[df.index],
         "Pedido Cliente":     t("Número pedido cliente").loc[df.index],
