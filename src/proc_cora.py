@@ -31,6 +31,9 @@ from proc_rv import processar_volume_rv
 # Virada de fonte: até set/2026 os dados são do Promax (fechamento de setembro = Promax);
 # o CORA só grava de out/2026 em diante — nunca sobrescreve mês anterior.
 CORA_INICIO = "2026-10"
+# Meses gravados pelo último processar_cora_completo — o app.py recalcula a RV de cada um (mês com
+# RV FECHADA é pulado pelo calcular_rv_completa).
+ULTIMOS_MESES = []
 
 
 MOTIVOS_DEVOLUCAO_PADRAO = {
@@ -115,6 +118,7 @@ def _num_br(serie):
 
 
 def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
+    ULTIMOS_MESES[:] = []
     """Importa o consulta-pedidos COMPLETO do CORA e alimenta todas as rotinas que antes
     vinham de relatórios separados do Promax. Retorna um resumo por rotina."""
     import io as _io
@@ -170,6 +174,7 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
               f"({sorted(df.loc[fora, '_mes'].unique())}) — ignoradas p/ não sobrescrever o mês.")
     df = df[~fora & df["_mes"].notna()].copy()
     meses = sorted(df["_mes"].unique())
+    ULTIMOS_MESES[:] = meses   # o app recalcula a RV de cada mês gravado que esteja ABERTO
     print(f"  📅 Meses cobertos e gravados: {meses}")
     if df.empty:
         # Nada a gravar (ex.: arquivo só de mês do Promax). NÃO roda pedidos/devoluções —

@@ -342,6 +342,10 @@ def upload_ambos():
             gc.collect()
             calcular_rv_completa()
             resultados["rv_recalculada"] = "✅ RV recalculada automaticamente"
+            if "cora" in arquivos:
+                _ant = _rv_meses_cora()
+                if _ant:
+                    resultados["rv_recalculada"] = f"✅ RV recalculada (mês atual e {', '.join(_ant)}; mês fechado é pulado)"
             # Import de mês ANTERIOR (ex.: 030509 de set/26 com "mês de referência"): recalcula
             # também esse mês — antes só o mês corrente era refeito. Mês com RV FECHADA é pulado
             # pelo próprio cálculo (reabrir no RV Simulador antes, se precisar).
@@ -474,6 +478,21 @@ def upload_buffer():
         return jsonify({"error": str(e)}), 500
 
 
+def _rv_meses_cora():
+    """RV dos meses ANTERIORES gravados pelo último import do CORA (o corrente já é recalculado por
+    quem chama). Sem isso, importar outubro em novembro atualizava o volume mas não a RV de outubro.
+    Mês com RV FECHADA é pulado pelo próprio calcular_rv_completa (o que foi pago não muda). Não
+    precisa marcar competência: o CORA grava cada linha no mês da Data entrega."""
+    import proc_cora
+    from datetime import date as _d
+    atual = _d.today().strftime("%Y-%m")
+    feitos = []
+    for m in list(proc_cora.ULTIMOS_MESES):
+        if m != atual:
+            calcular_rv_completa(mes_ref=m); feitos.append(m)
+    return feitos
+
+
 @app.route("/api/processar/cora", methods=["POST"])
 def upload_cora():
     """Consulta-pedidos do CORA — fonte do Buffer (novo) e do Deck (D+7).
@@ -486,6 +505,7 @@ def upload_cora():
         r = processar_cora_completo(request.files["arquivo"].read(), mes_ref=request.form.get("mes_ref") or None)
         try:
             calcular_rv_completa()
+            _rv_meses_cora()
         except Exception as e_rv:
             print(f"  ⚠️ Auto-recalc RV após CORA: {e_rv}")
         return jsonify({"success": True, "message": "CORA processado: " + " · ".join(f"{k}: {v}" for k, v in r.items())})
@@ -1010,7 +1030,8 @@ def upload_zip():
     if precisa_rv:
         try:
             calcular_rv_completa()
-            resultados["rv_recalculada"] = "✅ OK"
+            _ant = _rv_meses_cora() if "cora" in resultados else []
+            resultados["rv_recalculada"] = "✅ OK" + (f" (e {', '.join(_ant)}; mês fechado é pulado)" if _ant else "")
         except Exception as e:
             resultados["rv_recalculada"] = f"⚠️ {str(e)[:100]}"
 
