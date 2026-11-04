@@ -16,7 +16,8 @@ from proc_rv import processar_volume_rv
 # Regras (Eduardo, out/2026):
 #   • VENDA = Cód. operação (AR) = 1 · item ATENDIDO (Situação atend. item) · item/pedido
 #     não devolvido/cancelado (Situação item). Inclui o que está em rota (MPD_*), não só ENTREGUE.
-#   • Volume = Volume hectolitro (CS), lançado no DIA DE EMISSÃO DA NF (EB). Sem NF → entrega − 1 dia (D+1 = venda do dia).
+#   • Volume = Volume hectolitro (CS) da VENDA + BONIFICAÇÃO (op 2, igual ao BI — 04/11/2026),
+#     lançado no DIA DE EMISSÃO DA NF (EB). Sem NF → entrega − 1 dia (D+1 = venda do dia).
 #   • Devolução = Situação pedido FATURADO_NF_DEVOLVIDA; motivo = código (EH) → tabela de motivos;
 #     código desconhecido vira ocorrência (motivos_devolucao_pendentes) p/ cadastrar.
 #   • Buffer = Tipo buffer (W) = REPROGRAMADO e Situação pedido = AGUARDANDO_ROTEIRIZACAO.
@@ -165,9 +166,10 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     CANCEL = {"CANCELADO", "FATURADO_NF_DEVOLVIDA", "FATURADO_NF_CANCELADA"}
     df["_venda"] = ((df["_op"] == "1") & (df["_atend_item"] == "ATENDIDO") &
                     ~df["_sit_item"].isin(CANCEL) & ~df["_sit_ped"].isin(CANCEL))
-    # Bonificação de combo (bala/pirulito de brinde): conta como COMPRA do PDV (cobertura e
-    # distribuição, pela quantidade) mas NÃO entra em volume (Volume Entrega segue só venda).
-    df["_bonif"] = ((t("Desc. operação").str.upper() == "BONIF DES BALZ/COMBO") & (df["_atend_item"] == "ATENDIDO") &
+    # Bonificação (op 2 = BONIF DES BALZ/COMBO): conta como COMPRA do PDV (cobertura e distribuição)
+    # e, desde 04/11/2026, TAMBÉM no VOLUME (Volume Entrega = venda + bonificação), igual ao BI
+    # da Ambev (de-para NF a NF de set/26: o BI soma a operação 2 no volume).
+    df["_bonif"] = (((df["_op"] == "2") | (t("Desc. operação").str.upper() == "BONIF DES BALZ/COMBO")) & (df["_atend_item"] == "ATENDIDO") &
                     ~df["_sit_item"].isin(CANCEL) & ~df["_sit_ped"].isin(CANCEL))
     df["_devolvido"] = df["_sit_ped"] == "FATURADO_NF_DEVOLVIDA"
     motivos = _motivos_devolucao()
@@ -388,7 +390,7 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         "Cod. Prod.":         t("Cód. produto").loc[df.index],
         "Nome Prod.":         nome_prod,
         "Volume Marcacao":    fmt(df["_hl"]),
-        "Volume Entrega":     fmt(df["_hl"].where(df["_venda"], 0.0)),
+        "Volume Entrega":     fmt(df["_hl"].where(df["_venda"] | df["_bonif"], 0.0)),  # venda + bonificação (= BI)
         "Qtde Marcacao":      fmt(df["_qtd"]),
         # Rastreio (Pesquisa Pedido): operação do item e HL ENTREGUE de qualquer operação atendida
         # (bonificação/remessa não são venda, mas foram entregues — senão aparecem como ruptura falsa).
@@ -408,8 +410,8 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     })
     buf = _io.StringIO(); ped.to_csv(buf, sep=";", index=False)
     processar_pedidos(buf.getvalue().encode("utf-8"), df_clientes)
-    v = df[df["_venda"]]
-    res["pedidos"] = f"{v['_hl'].sum():,.1f} HL vendidos · {v['Número pedido'].nunique()} pedidos · meses {', '.join(meses)}"
+    v = df[df["_venda"] | df["_bonif"]]
+    res["pedidos"] = f"{v['_hl'].sum():,.1f} HL vendidos (venda + bonificação) · {v['Número pedido'].nunique()} pedidos · meses {', '.join(meses)}"
 
     # ── 3) FATURADOS (NF) → faturados_detalhe + faturado_nf ──────────────────────────
     nfok = (t("Número NF").loc[df.index] != "") & (df["_sit_ped"] != "FATURADO_NF_CANCELADA") & df["_setor"].isin(SETORES_VALIDOS)
