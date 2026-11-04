@@ -5,6 +5,11 @@ from proc_base import *  # noqa: F401,F403
 
 
 
+# CORA (04/11/2026): só conta o ENTREGUE, no dia da entrega — desliga a regra antiga "hoje = Volume
+# Marcação" (pedido ainda não entregue não entra). proc_cora liga isto em volta do processar_pedidos.
+SO_ENTREGUE = False
+
+
 def _processar_vendas_diaria(df):
     """Volume diário por PDV e por produto (setor x cod x DIA), acumulado mês a mês.
     Base da comparação D-1 acumulada no dashboard (dia 01..D-1 deste mês vs mês anterior).
@@ -57,7 +62,7 @@ def _processar_vendas_cliente(df_mes):
              "_volume", "_volume_marcacao"]
     d = df_mes[_COLS].copy()
     d["_data_str"] = d["_data"].dt.strftime("%d/%m/%Y")
-    eh_hoje = d["_data_str"] == hoje_str
+    eh_hoje = (d["_data_str"] == hoje_str) & (not SO_ENTREGUE)
     d["_vol_efetivo"] = d["_volume"]
     d.loc[eh_hoje, "_vol_efetivo"] = d.loc[eh_hoje, "_volume_marcacao"]
     # Quantidade (CORA): item vendido com 0,00 HL (bala, Halls…) também é compra do PDV.
@@ -406,7 +411,7 @@ def _processar_volume_diario(df):
     df_d["_data_str"] = df_d["_data"].dt.strftime("%d/%m/%Y")
 
     # Volume efetivo: marcação só no dia de hoje, entrega nos demais dias
-    eh_hoje = df_d["_data_str"] == hoje_str
+    eh_hoje = (df_d["_data_str"] == hoje_str) & (not SO_ENTREGUE)
     df_d["_vol_efetivo"] = df_d["_volume"]
     df_d.loc[eh_hoje, "_vol_efetivo"] = df_d.loc[eh_hoje, "_volume_marcacao"]
 

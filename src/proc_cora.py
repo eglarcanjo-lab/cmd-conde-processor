@@ -14,10 +14,13 @@ from proc_rv import processar_volume_rv
 # Faturados (NF), Faturamento Marketplace e Buffer + Deck D+7.
 #
 # Regras (Eduardo, out/2026):
-#   • VENDA = Cód. operação (AR) = 1 · item ATENDIDO (Situação atend. item) · item/pedido
-#     não devolvido/cancelado (Situação item). Inclui o que está em rota (MPD_*), não só ENTREGUE.
-#   • Volume = Volume hectolitro (CS) da VENDA + BONIFICAÇÃO (op 2, igual ao BI — 04/11/2026),
-#     lançado no DIA DE EMISSÃO DA NF (EB). Sem NF → entrega − 1 dia (D+1 = venda do dia).
+#   • REGRA ÚNICA (Eduardo, 04/11/2026 — igual ao BI da Ambev): volume, RV, vendas por PDV/produto,
+#     cobertura e faturamento Mktp contam SÓ o que foi ENTREGUE (Situação pedido = ENTREGUE), no
+#     DIA/MÊS DA ENTREGA (Data entrega, col D). Nada sobe antes da entrega → devolução não "desce" RV.
+#     Venda = op 1 (venda) + op 2 (bonificação), item ATENDIDO. HL do item = Quant. venda × Fator
+#     Hecto Comercial (col P da base de produtos 0111 = produtos_full.hl_caixa), sem arredondar.
+#   • "Programado p/ amanhã" (relatório/venda diária) = cora_dia com data = amanhã (pedidos aceitos
+#     ainda não entregues) — ver backend farol-volumes.
 #   • Devolução = Situação pedido FATURADO_NF_DEVOLVIDA; motivo = código (EH) → tabela de motivos;
 #     código desconhecido vira ocorrência (motivos_devolucao_pendentes) p/ cadastrar.
 #   • Buffer = Tipo buffer (W) = REPROGRAMADO e Situação pedido = AGUARDANDO_ROTEIRIZACAO.
@@ -137,12 +140,25 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     df["_op"] = t("Cód. operação").str.lstrip("0")
     df["_hl"] = _num_br(t("Volume hectolitro"))
     df["_qtd"] = _num_br(t("Quant. venda"))
+    # HL exato = Quant. venda × Fator Hecto Comercial (produtos_full.hl_caixa, col P do 0111) — o
+    # CORA arredonda o HL do item em 2 casas e o BI não (de-para set/26: 99,96% dos itens exatos).
+    # Produto sem fator cadastrado: fica o HL do CORA.
+    try:
+        pf = ler_aba("produtos_full")
+        fator = dict(zip(pf["cod"].astype(str).str.strip().str.replace(r"\.0$", "", regex=True).str.lstrip("0"),
+                         pd.to_numeric(pf["hl_caixa"], errors="coerce"))) if not pf.empty else {}
+    except Exception as e:
+        print(f"  ⚠️ produtos_full não lida (HL fica o do CORA): {e}"); fator = {}
+    _f = t("Cód. produto").str.replace(r"\.0$", "", regex=True).str.lstrip("0").map(fator)
+    _usa = _f.notna() & (_f > 0)
+    df["_hl"] = (df["_qtd"] * _f).where(_usa, df["_hl"])
+    print(f"  ⚖️ HL = qtd × Fator Hecto Comercial em {_usa.mean():.1%} das linhas (resto = HL do CORA)")
+    _f = _usa = None
     d_ent = pd.to_datetime(t("Data entrega"), format="%d/%m/%Y", errors="coerce")
     d_nf = pd.to_datetime(t("Data emissão NF"), format="%d/%m/%Y", errors="coerce")
-    # Sem NF ainda → entrega − 1 dia (a NF sai sempre na véspera da entrega). Assim o pedido de
-    # hoje p/ entrega amanhã (D+1) já conta como venda/volume diário de HOJE e não muda de dia
-    # quando a NF for emitida.
-    df["_data"] = d_nf.fillna(d_ent - pd.Timedelta(days=1))
+    # Data = DATA DE ENTREGA (regra do BI: só conta no mês/dia em que foi entregue). Até 04/11/2026
+    # era a emissão da NF (sem NF: entrega − 1), o que punha NF de fim de mês no mês anterior.
+    df["_data"] = d_ent
     df["_mes"] = df["_data"].dt.strftime("%Y-%m")
 
     # Proteção de mês: só meses COBERTOS pelo arquivo (entregas dentro do mês) e a partir da
@@ -172,6 +188,9 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
     df["_bonif"] = (((df["_op"] == "2") | (t("Desc. operação").str.upper() == "BONIF DES BALZ/COMBO")) & (df["_atend_item"] == "ATENDIDO") &
                     ~df["_sit_item"].isin(CANCEL) & ~df["_sit_ped"].isin(CANCEL))
     df["_devolvido"] = df["_sit_ped"] == "FATURADO_NF_DEVOLVIDA"
+    # Só ENTREGUE conta (volume, RV, compra do PDV, Mktp). Em rota / aguardando = "programado".
+    df["_entregue"] = (df["_sit_ped"] == "ENTREGUE") & ~df["_sit_item"].isin(CANCEL)
+    df["_conta"] = (df["_venda"] | df["_bonif"]) & df["_entregue"]
     motivos = _motivos_devolucao()
     df["_cod_motivo"] = t("Motivo devol./cancel. NF").str.lstrip("0")   # "0" = sem motivo → ""
     df["_desc_motivo"] = df["_cod_motivo"].map(lambda c: motivos.get(c, f"MOTIVO {c} (NÃO CADASTRADO)") if c else "")
@@ -252,10 +271,11 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
             # ao BI — troca (5), vasilhame (9), reposição (39), perda (101…) não são volume
             "op": df.loc[ci, "_op"].values,
             "volume_hl": df.loc[ci, "_hl"].values,
+            "valor": _num_br(ts("Valor sem ADF", ci)).values,   # R$ (Mktp do "programado p/ amanhã")
         })
         dia_df = (dia_df.groupby(["data", "setor", "cod_pdv", "nome_pdv", "cod_produto", "nome_produto", "situacao", "op"], as_index=False)
-                  ["volume_hl"].sum())
-        dia_df["volume_hl"] = dia_df["volume_hl"].round(3)
+                  [["volume_hl", "valor"]].sum())
+        dia_df["volume_hl"] = dia_df["volume_hl"].round(5); dia_df["valor"] = dia_df["valor"].round(2)
         sobrescrever_aba("cora_dia", dia_df)
         res["cora_dia"] = f"{len(dia_df)} linhas (painel do dia, {dia_df['data'].nunique()} dias)"
     except Exception as e:
@@ -393,14 +413,14 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         "Cod. Prod.":         t("Cód. produto").loc[df.index],
         "Nome Prod.":         nome_prod,
         "Volume Marcacao":    fmt(df["_hl"]),
-        "Volume Entrega":     fmt(df["_hl"].where(df["_venda"] | df["_bonif"], 0.0)),  # venda + bonificação (= BI)
+        "Volume Entrega":     fmt(df["_hl"].where(df["_conta"], 0.0)),  # venda + bonificação ENTREGUE (= BI)
         "Qtde Marcacao":      fmt(df["_qtd"]),
         # Rastreio (Pesquisa Pedido): operação do item e HL ENTREGUE de qualquer operação atendida
         # (bonificação/remessa não são venda, mas foram entregues — senão aparecem como ruptura falsa).
         "Operacao":           t("Desc. operação").loc[df.index],
         "HL Atendido":        fmt(df["_hl"].where((df["_atend_item"] == "ATENDIDO") & ~df["_sit_item"].isin(CANCEL)
                                                   & ~df["_sit_ped"].isin(CANCEL), 0.0)),
-        "Qtde Entrega":       fmt(df["_qtd"].where(df["_venda"] | df["_bonif"], 0.0)),
+        "Qtde Entrega":       fmt(df["_qtd"].where(df["_conta"], 0.0)),
         "Motivo":             df["_desc_motivo"].where(df["_devolvido"],
                                   pd.Series("Pedido Normal", index=df.index).where(~((df["_atend_item"] == "FALTA") & df["_op"].isin(["1", "2"])), "FALTA")),  # ruptura = falta em venda/bonif (op 1/2)
         "Desc Tipo Movimento": t("Desc. tipo movimento").loc[df.index].str.upper(),
@@ -412,9 +432,14 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         "Entrega Real":       dd(d_ent.loc[df.index].where(df["_sit_ped"] == "ENTREGUE")),
     })
     buf = _io.StringIO(); ped.to_csv(buf, sep=";", index=False)
-    processar_pedidos(buf.getvalue().encode("utf-8"), df_clientes)
-    v = df[df["_venda"] | df["_bonif"]]
-    res["pedidos"] = f"{v['_hl'].sum():,.1f} HL vendidos (venda + bonificação) · {v['Número pedido'].nunique()} pedidos · meses {', '.join(meses)}"
+    import proc_analises as _pa
+    _pa.SO_ENTREGUE = True   # só ENTREGUE conta: sem "hoje = marcação" nas vendas/volume diário
+    try:
+        processar_pedidos(buf.getvalue().encode("utf-8"), df_clientes)
+    finally:
+        _pa.SO_ENTREGUE = False
+    v = df[df["_conta"]]
+    res["pedidos"] = f"{v['_hl'].sum():,.1f} HL entregues (venda + bonificação) · {v['Número pedido'].nunique()} pedidos · meses {', '.join(meses)}"
 
     # ── 3) FATURADOS (NF) → faturados_detalhe + faturado_nf ──────────────────────────
     nfok = (t("Número NF").loc[df.index] != "") & (df["_sit_ped"] != "FATURADO_NF_CANCELADA") & df["_setor"].isin(SETORES_VALIDOS)
@@ -462,7 +487,7 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
             c = str(r.get("cod", "")).strip().lstrip("0")
             if c and "MKTP" in str(r.get("categorias", "")).upper():
                 mktp.add(c)
-    vm = df[df["_venda"] & df["_setor"].isin(SETORES_VALIDOS)].copy()
+    vm = df[df["_venda"] & df["_entregue"] & df["_setor"].isin(SETORES_VALIDOS)].copy()  # só entregue
     vm["_cod_prod"] = t("Cód. produto").loc[vm.index].str.lstrip("0")
     vm = vm[vm["_cod_prod"].isin(mktp)]
     vm["_rs"] = _num_br(t("Valor sem ADF").loc[vm.index])
