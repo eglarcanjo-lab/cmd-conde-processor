@@ -60,7 +60,8 @@ def _processar_vendas_cliente(df_mes):
     # _categorias (listas Python, pesadas) e mais ~10 colunas que não entram aqui.
     _COLS = ["_data", "_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod.",
              "_volume", "_volume_marcacao"]
-    d = df_mes[_COLS].copy()
+    tem_valor = "_valor" in df_mes.columns   # só CORA: R$ entregue (peso do Mktp na distribuição de metas)
+    d = df_mes[_COLS + (["_valor"] if tem_valor else [])].copy()
     d["_data_str"] = d["_data"].dt.strftime("%d/%m/%Y")
     eh_hoje = (d["_data_str"] == hoje_str) & (not SO_ENTREGUE)
     d["_vol_efetivo"] = d["_volume"]
@@ -81,9 +82,12 @@ def _processar_vendas_cliente(df_mes):
     df_v["_mes"] = df_v["_data"].dt.strftime("%Y-%m")
     # ultima_compra (dd/mm/aaaa): último dia com compra do produto no mês — farol matinal
     # (Score 5: "há quanto tempo o PDV não compra o que mais compra").
+    _agg = dict(volume_hl=("_vol_efetivo", "sum"), _ult=("_data", "max"))
+    if tem_valor:
+        _agg["valor"] = ("_valor", "sum")
     g = (
         df_v.groupby(["_setor", "_cod_pdv", "Nome Cliente", "Cod. Prod.", "Nome Prod.", "_mes"])
-        .agg(volume_hl=("_vol_efetivo", "sum"), _ult=("_data", "max")).reset_index()
+        .agg(**_agg).reset_index()
         .rename(columns={
             "_setor": "setor", "_cod_pdv": "cod_pdv", "Nome Cliente": "nome_pdv",
             "Cod. Prod.": "cod_produto", "Nome Prod.": "nome_produto", "_mes": "mes_referencia",
@@ -91,6 +95,8 @@ def _processar_vendas_cliente(df_mes):
         .sort_values(["mes_referencia", "setor", "volume_hl"], ascending=[True, True, False])
     )
     g["volume_hl"] = g["volume_hl"].round(3)
+    if tem_valor:
+        g["valor"] = g["valor"].round(2)
     g["ultima_compra"] = g["_ult"].dt.strftime("%d/%m/%Y")
     g = g.drop(columns=["_ult"])
     # Acumula: substitui só os meses presentes neste arquivo, mantém os demais.

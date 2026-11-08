@@ -160,6 +160,7 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
     COLS_USADAS = {"Setor", "Data", "Cliente", "Nome Cliente", "Cod. Prod.",
                    "Nome Prod.", "Volume Entrega", "Volume Marcacao", "Motivo",
                    "Qtde Entrega", "Qtde Marcacao",   # só no CORA (itens com 0 HL: balas, Halls…)
+                   "Valor Entrega",                    # só no CORA (R$ entregue → vendas_cliente_produto.valor)
                    "Operacao", "HL Atendido",          # só no CORA (rastreio da Pesquisa Pedido)
                    "Desc Tipo Movimento", "Nota Fiscal",
                    # rastreabilidade do pedido BEES (Pesquisa Pedido)
@@ -209,6 +210,11 @@ def processar_pedidos(conteudo_bytes, df_clientes_base=None):
         df["Volume Entrega"].astype(str).str.replace(",", ".", regex=False).str.strip(),
         errors="coerce"
     ).fillna(0.0)
+
+    # R$ entregue (só o CORA manda) — Promax/histórico ficam sem (coluna vazia).
+    if "Valor Entrega" in df.columns:
+        df["_valor"] = pd.to_numeric(df["Valor Entrega"].astype(str).str.replace(",", ".", regex=False).str.strip(),
+                                     errors="coerce").fillna(0.0)
 
     # Volume Marcacao (col AI) = o que foi pedido/marcado. Usado para:
     #  • Volume Diário do DIA ATUAL (ainda não há faturamento/entrega)

@@ -420,6 +420,9 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
         "Volume Marcacao":    fmt(df["_hl"]),
         "Volume Entrega":     fmt(df["_hl"].where(df["_conta"], 0.0)),  # venda + bonificação ENTREGUE (= BI)
         "Qtde Marcacao":      fmt(df["_qtd"]),
+        # R$ (Valor sem ADF) do que CONTA (venda + bonif ENTREGUE) → vendas_cliente_produto.valor
+        # (peso do Marketplace na distribuição de metas pelo tri — Admin › Metas).
+        "Valor Entrega":      fmt(_num_br(t("Valor sem ADF").loc[df.index]).where(df["_conta"], 0.0)),
         # Rastreio (Pesquisa Pedido): operação do item e HL ENTREGUE de qualquer operação atendida
         # (bonificação/remessa não são venda, mas foram entregues — senão aparecem como ruptura falsa).
         "Operacao":           t("Desc. operação").loc[df.index],
