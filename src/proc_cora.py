@@ -167,11 +167,16 @@ def processar_cora_completo(conteudo_bytes, mes_ref=None, df_clientes=None):
 
     # Proteção de mês: só meses COBERTOS pelo arquivo (entregas dentro do mês) e a partir da
     # VIRADA para o CORA (CORA_INICIO). Meses anteriores são do Promax e ficam intocados.
-    cobertos = {m for m in d_ent.dt.strftime("%Y-%m").dropna() if m >= CORA_INICIO}
+    # Mês COBERTO = o arquivo tem entregas no INÍCIO dele (até o dia 7). Desde que a data passou a
+    # ser a de ENTREGA (v3.133), o arquivo de nov trazia uns pedidos entregues no fim de out e, sem
+    # essa checagem, APAGAVA outubro inteiro e gravava só esses (09/11/2026: out ficou com ~12 HL).
+    _m_ent = d_ent.dt.strftime("%Y-%m")
+    cobertos = {m for m in _m_ent[d_ent.dt.day <= 7].dropna().unique() if m >= CORA_INICIO}
     fora = df["_mes"].notna() & ~df["_mes"].isin(cobertos)
     if fora.any():
-        print(f"  ⚠️ {int(fora.sum())} linhas com NF em mês não coberto pelo arquivo "
-              f"({sorted(df.loc[fora, '_mes'].unique())}) — ignoradas p/ não sobrescrever o mês.")
+        print(f"  ⚠️ {int(fora.sum())} linhas com entrega em mês não coberto pelo arquivo "
+              f"({sorted(df.loc[fora, '_mes'].unique())}: o arquivo não tem o início do mês) — "
+              f"ignoradas p/ não sobrescrever o mês.")
     df = df[~fora & df["_mes"].notna()].copy()
     meses = sorted(df["_mes"].unique())
     ULTIMOS_MESES[:] = meses   # o app recalcula a RV de cada mês gravado que esteja ABERTO
